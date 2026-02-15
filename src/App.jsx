@@ -40,6 +40,25 @@ const EMPTY_AGENDA = {
   primaryProgramNotes: "",
 };
 
+const DEFAULT_SMART_TEXT = {
+  openingText: "We will open our meeting by singing Hymn {hymnNumber}{hymnTitle}, after which {invocationName} will offer the invocation.",
+  reverenceText: "Thank you for your reverence during the sacrament ordinance.",
+  fastSundayNote: "Note: The conducting counselor will share their testimony, after which the floor will be opened for others to bear their testimonies.",
+  fastSundayInstructions: "The remainder of the time is for the bearing of testimonies. We invite you to come forward and share your testimony, or stand and an Aaronic Priesthood holder will bring a microphone to you. We will plan to conclude at 5 minutes before the hour.",
+  releasesText: "A release has been extended to the following individual{plural}:",
+  releasesThanks: "Those who wish to express thanks for their service may show it by the uplifted hand.",
+  sustainingsText: "The following individual{plural} {hasHave} been called to serve and we present {themThem} for your sustaining vote:",
+  sustainingsVote: "Those in favor may manifest it by raising the right hand. Those opposed, if any, may manifest it.",
+  ordinationsText: "The following will be ordained to the {office} in the Aaronic Priesthood:",
+  appreciationText: "We appreciate those who have participated today. Thanks to our Chorister {choristerName} and our Organist {organistName} for the music. We will close by singing Hymn {closingHymnNumber}{closingHymnTitle}, after which {benedictionName} will offer the benediction."
+};
+
+const USER_ROLES = {
+  ADMIN: 'administrator',
+  EDITOR: 'editor',
+  VIEWER: 'viewer'
+};
+
 const BIZ_SECTIONS = {
   releases: { itemLabel: "Release", fields: ["name", "calling"], labels: ["Name", "Calling"] },
   callings: { itemLabel: "Sustaining", fields: ["name", "calling"], labels: ["Name", "Calling"] },
@@ -157,15 +176,21 @@ const NameDropdown = memo(function NameDropdown({ label, value, options, onChang
 });
 
 // ── SETTINGS MODAL (names + hymns) ──
-function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, onSaveHymns }) {
+function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, onSaveHymns, smartText, onSaveSmartText }) {
   const [groups, setGroups] = useState(nameGroups);
   const [newName, setNewName] = useState({ presiding: "", conducting: "", chorister: "", organist: "" });
   const [hymns, setHymns] = useState(customHymns);
   const [newHymn, setNewHymn] = useState({ number: "", title: "" });
   const [csvFile, setCsvFile] = useState(null);
-  const [tab, setTab] = useState("names"); // names | hymns
+  const [textSettings, setTextSettings] = useState(smartText || DEFAULT_SMART_TEXT);
+  const [tab, setTab] = useState("names"); // names | hymns | text
 
-  useEffect(() => { setGroups(nameGroups); setHymns(customHymns); setCsvFile(null); }, [nameGroups, customHymns]);
+  useEffect(() => {
+    setGroups(nameGroups);
+    setHymns(customHymns);
+    setTextSettings(smartText || DEFAULT_SMART_TEXT);
+    setCsvFile(null);
+  }, [nameGroups, customHymns, smartText]);
 
   if (!isOpen) return null;
 
@@ -249,7 +274,14 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
     };
     reader.readAsText(file);
   };
-  const handleSave = () => { onSaveNames(groups); onSaveHymns(hymns); onClose(); };
+  const handleSave = () => {
+    onSaveNames(groups);
+    onSaveHymns(hymns);
+    if (onSaveSmartText) {
+      onSaveSmartText(textSettings);
+    }
+    onClose();
+  };
 
   const nameCfgs = {
     presiding: { label: "Presiding", hint: "Bishopric members, stake leaders, visiting authorities" },
@@ -270,6 +302,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
         <div style={M.tabs}>
           <button style={tab === "names" ? M.tabActive : M.tab} type="button" onClick={() => setTab("names")}>Name Lists</button>
           <button style={tab === "hymns" ? M.tabActive : M.tab} type="button" onClick={() => setTab("hymns")}>Custom Hymns</button>
+          <button style={tab === "text" ? M.tabActive : M.tab} type="button" onClick={() => setTab("text")}>Smart Text</button>
         </div>
 
         <div style={M.body}>
@@ -329,6 +362,35 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
               )}
             </div>
           )}
+          {tab === "text" && (
+            <div>
+              <p style={M.groupHint}>Customize the text that appears in the printed agenda.</p>
+              <div style={M.group}>
+                <label style={M.groupLabel}>Opening Text</label>
+                <textarea
+                  style={{ ...M.input, height: "60px", fontFamily: "monospace", fontSize: "12px" }}
+                  value={textSettings?.openingText || DEFAULT_SMART_TEXT.openingText}
+                  onChange={e => setTextSettings(prev => ({ ...prev, openingText: e.target.value }))}
+                />
+              </div>
+              <div style={M.group}>
+                <label style={M.groupLabel}>Reverence Text</label>
+                <textarea
+                  style={{ ...M.input, height: "40px", fontFamily: "monospace", fontSize: "12px" }}
+                  value={textSettings?.reverenceText || DEFAULT_SMART_TEXT.reverenceText}
+                  onChange={e => setTextSettings(prev => ({ ...prev, reverenceText: e.target.value }))}
+                />
+              </div>
+              <div style={M.group}>
+                <label style={M.groupLabel}>Appreciation Text</label>
+                <textarea
+                  style={{ ...M.input, height: "80px", fontFamily: "monospace", fontSize: "12px" }}
+                  value={textSettings?.appreciationText || DEFAULT_SMART_TEXT.appreciationText}
+                  onChange={e => setTextSettings(prev => ({ ...prev, appreciationText: e.target.value }))}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={M.footer}>
@@ -336,6 +398,224 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
           <button style={M.saveBtn} type="button" onClick={handleSave}>Save</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── USER MANAGEMENT MODAL ──
+function UserManagementModal({ isOpen, onClose, users, currentUser, onApproveUser, onUpdateUserRole, onRemoveUser }) {
+  if (!isOpen) return null;
+
+  const pendingUsers = users.filter(u => !u.approved);
+  const activeUsers = users.filter(u => u.approved);
+
+  return (
+    <div style={S.modalOverlay}>
+      <div style={S.modalContent}>
+        <div style={S.modalHeader}>
+          <h3 style={S.modalTitle}>User Management</h3>
+          <button style={S.modalCloseBtn} type="button" onClick={onClose}>×</button>
+        </div>
+
+        <div style={S.modalBody}>
+          {pendingUsers.length > 0 && (
+            <div style={S.userSection}>
+              <h4 style={S.sectionTitle}>Pending Approval ({pendingUsers.length})</h4>
+              {pendingUsers.map(user => (
+                <div key={user.id} style={S.userItem}>
+                  <div style={S.userInfo}>
+                    <strong>{user.username}</strong>
+                    <span style={S.userEmail}>{user.email}</span>
+                    <span style={S.userDate}>Registered: {new Date(user.createdAt).toLocaleDateString()}</span>
+                  </div>
+                  <div style={S.userActions}>
+                    <button
+                      style={S.approveBtn}
+                      type="button"
+                      onClick={() => onApproveUser(user.id)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      style={S.rejectBtn}
+                      type="button"
+                      onClick={() => onRemoveUser(user.id)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={S.userSection}>
+            <h4 style={S.sectionTitle}>Active Users ({activeUsers.length})</h4>
+            {activeUsers.map(user => (
+              <div key={user.id} style={S.userItem}>
+                <div style={S.userInfo}>
+                  <strong>{user.username}</strong>
+                  <span style={S.userEmail}>{user.email}</span>
+                  <span style={S.userRole}>Role: {user.role}</span>
+                </div>
+                {currentUser.id !== user.id && (
+                  <div style={S.userActions}>
+                    <select
+                      style={S.roleSelect}
+                      value={user.role}
+                      onChange={(e) => onUpdateUserRole(user.id, e.target.value)}
+                    >
+                      <option value={USER_ROLES.VIEWER}>Viewer</option>
+                      <option value={USER_ROLES.EDITOR}>Editor</option>
+                      <option value={USER_ROLES.ADMIN}>Administrator</option>
+                    </select>
+                    <button
+                      style={S.removeBtn}
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Remove user "${user.username}"?`)) {
+                          onRemoveUser(user.id);
+                        }
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AUTHENTICATION COMPONENTS ──
+function LoginForm({ onLogin, onSwitchToRegister }) {
+  const [username, setUsername] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!username.trim()) return;
+
+    setLoading(true);
+    setError("");
+    const result = await onLogin(username.trim());
+    setLoading(false);
+
+    if (!result.success) {
+      setError(result.error);
+    }
+  };
+
+  return (
+    <div style={S.authForm}>
+      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
+      <h2 style={S.authSubtitle}>Sign In</h2>
+      <form onSubmit={handleSubmit}>
+        <div style={S.authField}>
+          <label style={S.fieldLabel}>Username</label>
+          <input
+            style={S.input}
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Enter your username"
+          />
+        </div>
+        {error && <p style={S.authError}>{error}</p>}
+        <button style={S.authBtn} type="submit" disabled={loading}>
+          {loading ? "Signing In..." : "Sign In"}
+        </button>
+      </form>
+      <p style={S.authLink}>
+        Don't have an account?{" "}
+        <button style={S.authLinkBtn} type="button" onClick={onSwitchToRegister}>
+          Register here
+        </button>
+      </p>
+    </div>
+  );
+}
+
+function RegisterForm({ onRegister, onSwitchToLogin, onPendingApproval }) {
+  const [formData, setFormData] = useState({ username: "", email: "" });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formData.username.trim() || !formData.email.trim()) return;
+
+    setLoading(true);
+    setError("");
+    const result = await onRegister(formData);
+    setLoading(false);
+
+    if (result.success) {
+      if (result.needsApproval) {
+        onPendingApproval();
+      }
+    } else {
+      setError(result.error || "Registration failed");
+    }
+  };
+
+  return (
+    <div style={S.authForm}>
+      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
+      <h2 style={S.authSubtitle}>Register</h2>
+      <form onSubmit={handleSubmit}>
+        <div style={S.authField}>
+          <label style={S.fieldLabel}>Username</label>
+          <input
+            style={S.input}
+            type="text"
+            value={formData.username}
+            onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
+            placeholder="Choose a username"
+          />
+        </div>
+        <div style={S.authField}>
+          <label style={S.fieldLabel}>Email</label>
+          <input
+            style={S.input}
+            type="email"
+            value={formData.email}
+            onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+            placeholder="Enter your email"
+          />
+        </div>
+        {error && <p style={S.authError}>{error}</p>}
+        <button style={S.authBtn} type="submit" disabled={loading}>
+          {loading ? "Registering..." : "Register"}
+        </button>
+      </form>
+      <p style={S.authLink}>
+        Already have an account?{" "}
+        <button style={S.authLinkBtn} type="button" onClick={onSwitchToLogin}>
+          Sign in here
+        </button>
+      </p>
+    </div>
+  );
+}
+
+function PendingApproval({ onBackToLogin }) {
+  return (
+    <div style={S.authForm}>
+      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
+      <h2 style={S.authSubtitle}>Account Pending Approval</h2>
+      <p style={S.authMessage}>
+        Your account has been created and is pending approval by an administrator.
+        You'll be able to access the application once your account is approved.
+      </p>
+      <button style={S.authBtn} type="button" onClick={onBackToLogin}>
+        Back to Sign In
+      </button>
     </div>
   );
 }
@@ -355,6 +635,13 @@ export default function App() {
     wardBusiness: true, speakers: true, youthSpeakers: false,
     musicalNumbers: false, primary: false,
   });
+
+  // ── AUTHENTICATION & USER MANAGEMENT ──
+  const [currentUser, setCurrentUser] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [smartText, setSmartText] = useState(DEFAULT_SMART_TEXT);
+  const [authView, setAuthView] = useState("login"); // login, register, pending
+  const [showUserManagement, setShowUserManagement] = useState(false);
 
   const agendaRef = useRef(null);
   agendaRef.current = agenda;
@@ -530,9 +817,137 @@ export default function App() {
     setView("edit");
   }, []);
 
+  // ── AUTHENTICATION FUNCTIONS ──
+  const loadUsersFromStorage = useCallback(async () => {
+    try {
+      const result = await storage.get("agenda-users");
+      return JSON.parse(result.value);
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const saveUsers = useCallback(async (userList) => {
+    setUsers(userList);
+    try {
+      await storage.set("agenda-users", JSON.stringify(userList));
+    } catch (e) {
+      console.error("Failed to save users:", e);
+    }
+  }, []);
+
+  const registerUser = useCallback(async (userData) => {
+    const existingUsers = await loadUsersFromStorage();
+    const isFirstUser = existingUsers.length === 0;
+
+    const newUser = {
+      id: Date.now().toString(),
+      username: userData.username,
+      email: userData.email,
+      role: isFirstUser ? USER_ROLES.ADMIN : USER_ROLES.VIEWER,
+      approved: isFirstUser,
+      createdAt: new Date().toISOString()
+    };
+
+    const updatedUsers = [...existingUsers, newUser];
+    await saveUsers(updatedUsers);
+
+    if (isFirstUser) {
+      setCurrentUser(newUser);
+      await storage.set("agenda-current-user", newUser.id);
+      return { success: true, user: newUser };
+    } else {
+      return { success: true, needsApproval: true };
+    }
+  }, [saveUsers, loadUsersFromStorage]);
+
+  const loginUser = useCallback(async (username) => {
+    try {
+      const result = await storage.get("agenda-users");
+      const userList = JSON.parse(result.value);
+      const user = userList.find(u => u.username === username);
+
+      if (!user) {
+        return { success: false, error: "User not found" };
+      }
+
+      if (!user.approved) {
+        return { success: false, error: "Account pending approval" };
+      }
+
+      setCurrentUser(user);
+      await storage.set("agenda-current-user", user.id);
+      return { success: true, user };
+    } catch {
+      return { success: false, error: "Login failed" };
+    }
+  }, []);
+
+  const hasPermission = useCallback((action) => {
+    if (!currentUser) return false;
+
+    switch (action) {
+      case 'view':
+        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR, USER_ROLES.VIEWER].includes(currentUser.role);
+      case 'edit':
+        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR].includes(currentUser.role);
+      case 'admin':
+        return currentUser.role === USER_ROLES.ADMIN;
+      case 'wardBusiness':
+        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR].includes(currentUser.role);
+      default:
+        return false;
+    }
+  }, [currentUser]);
+
+  const logoutUser = useCallback(async () => {
+    setCurrentUser(null);
+    await storage.delete("agenda-current-user");
+  }, []);
+
+  const approveUser = useCallback(async (userId) => {
+    const userList = [...users];
+    const userIndex = userList.findIndex(u => u.id === userId);
+    if (userIndex !== -1) {
+      userList[userIndex].approved = true;
+      await saveUsers(userList);
+    }
+  }, [users, saveUsers]);
+
+  const updateUserRole = useCallback(async (userId, newRole) => {
+    const userList = [...users];
+    const userIndex = userList.findIndex(u => u.id === userId);
+    if (userIndex !== -1) {
+      userList[userIndex].role = newRole;
+      await saveUsers(userList);
+    }
+  }, [users, saveUsers]);
+
+  const removeUser = useCallback(async (userId) => {
+    const userList = users.filter(u => u.id !== userId);
+    await saveUsers(userList);
+  }, [users, saveUsers]);
+
   const toggle = useCallback((k) => setExpanded(p => ({ ...p, [k]: !p[k] })), []);
 
-  if (loading || !agenda) return <div style={S.loadWrap}><p style={S.loadText}>Loading...</p></div>;
+  if (loading) return <div style={S.loadWrap}><p style={S.loadText}>Loading...</p></div>;
+
+  // ── AUTHENTICATION VIEWS ──
+  if (!currentUser) {
+    return (
+      <div style={S.authContainer}>
+        {authView === "login" ? (
+          <LoginForm onLogin={loginUser} onSwitchToRegister={() => setAuthView("register")} />
+        ) : authView === "register" ? (
+          <RegisterForm onRegister={registerUser} onSwitchToLogin={() => setAuthView("login")} onPendingApproval={() => setAuthView("pending")} />
+        ) : (
+          <PendingApproval onBackToLogin={() => setAuthView("login")} />
+        )}
+      </div>
+    );
+  }
+
+  if (!agenda) return <div style={S.loadWrap}><p style={S.loadText}>Loading...</p></div>;
 
   // ── PREVIEW ──
   if (view === "preview") {
@@ -866,12 +1281,28 @@ export default function App() {
       <div style={S.toolbar}>
         <div style={S.tbLeft}><h1 style={S.appTitle}>Sacrament Meeting</h1></div>
         <div style={S.tbRight}>
+          <span style={S.userInfo}>
+            {currentUser.username} ({currentUser.role})
+          </span>
           <button style={S.toolBtn} type="button" onClick={() => setShowSettings(true)}>⚙ Settings</button>
+          {hasPermission('admin') && (
+            <button style={S.toolBtn} type="button" onClick={() => setShowUserManagement(true)}>👥 Users</button>
+          )}
           <button style={S.toolBtn} type="button" onClick={() => setView("history")}>📋 History</button>
-          <button style={S.toolBtn} type="button" onClick={newAgenda}>＋ New</button>
-          <button style={S.toolBtn} type="button" onClick={duplicateAgenda}>⧉ Next Week</button>
+          {hasPermission('edit') && (
+            <>
+              <button style={S.toolBtn} type="button" onClick={newAgenda}>＋ New</button>
+              <button style={S.toolBtn} type="button" onClick={duplicateAgenda}>⧉ Next Week</button>
+            </>
+          )}
           <button style={S.toolBtn} type="button" onClick={() => setView("preview")}>🖨 Print</button>
-          <button style={S.saveBtn} type="button" onClick={saveAgenda}>{saveStatus || "💾 Save"}</button>
+          {hasPermission('edit') && (
+            <button style={S.saveBtn} type="button" onClick={saveAgenda}>{saveStatus || "💾 Save"}</button>
+          )}
+          <button style={S.toolBtn} type="button" onClick={async () => {
+            await logoutUser();
+            window.location.reload();
+          }}>🚪 Logout</button>
         </div>
       </div>
 
@@ -908,8 +1339,9 @@ export default function App() {
         <HymnInput label="Opening Hymn" hymn={agenda.openingHymn} onChange={v => updateField("openingHymn", v)} allHymns={allHymns} />
         <div style={S.fieldGroup}><label style={S.fieldLabel}>Invocation</label><input style={S.input} type="text" placeholder="Name" value={agenda.invocation} onChange={e => updateField("invocation", e.target.value)} /></div>
 
-        <Section label="Ward Business" isOpen={expanded.wardBusiness} onToggle={() => toggle("wardBusiness")}>
-          {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => (
+        {hasPermission('wardBusiness') && (
+          <Section label="Ward Business" isOpen={expanded.wardBusiness} onToggle={() => toggle("wardBusiness")}>
+            {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => (
             <div key={key} style={S.bizSub}>
               <div style={S.subLabel}>{cfg.itemLabel}s</div>
               {(agenda.wardBusiness[key] || []).map((item, idx) => (
@@ -944,9 +1376,10 @@ export default function App() {
               <button style={S.addBtn} type="button" onClick={() => addListItem(`wardBusiness.${key}`, Object.fromEntries(cfg.fields.map(f => [f, ""])))}>+ Add {cfg.itemLabel}</button>
             </div>
           ))}
-          <div style={S.bizSub}><div style={S.subLabel}>Other Business</div>
-            <textarea style={S.ta} rows={3} placeholder="Other ward business (each line becomes a bullet point)&#10;Example:&#10;Stake conference next month&#10;Time change announcement" value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
-        </Section>
+            <div style={S.bizSub}><div style={S.subLabel}>Other Business</div>
+              <textarea style={S.ta} rows={3} placeholder="Other ward business (each line becomes a bullet point)&#10;Example:&#10;Stake conference next month&#10;Time change announcement" value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
+          </Section>
+        )}
 
         <HymnInput label="Sacrament Hymn" hymn={agenda.sacramentHymn} onChange={v => updateField("sacramentHymn", v)} allHymns={allHymns} />
 
@@ -1068,7 +1501,20 @@ export default function App() {
 
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
         nameGroups={nameGroups} onSaveNames={saveNameGroups}
-        customHymns={customHymns} onSaveHymns={saveCustomHymns} />
+        customHymns={customHymns} onSaveHymns={saveCustomHymns}
+        smartText={smartText} onSaveSmartText={async (text) => {
+          setSmartText(text);
+          await storage.set("agenda-smart-text", JSON.stringify(text));
+        }} />
+      <UserManagementModal
+        isOpen={showUserManagement}
+        onClose={() => setShowUserManagement(false)}
+        users={users}
+        currentUser={currentUser}
+        onApproveUser={approveUser}
+        onUpdateUserRole={updateUserRole}
+        onRemoveUser={removeUser}
+      />
       <style>{`@media print{body *{visibility:hidden!important}.no-print{display:none!important}}`}</style>
     </div>
   );
@@ -1082,10 +1528,41 @@ const fs = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
 const S = {
   loadWrap:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:fs},
   loadText:{color:C.mt,fontSize:14},
+  // Authentication styles
+  authContainer:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:fs},
+  authForm:{background:"#fff",padding:"2rem",borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:"0 4px 16px rgba(0,0,0,0.08)",maxWidth:400,width:"100%",margin:"0 20px"},
+  authTitle:{margin:"0 0 0.5rem",fontSize:20,fontFamily:ff,fontWeight:600,color:C.tx,textAlign:"center"},
+  authSubtitle:{margin:"0 0 1.5rem",fontSize:16,fontFamily:fs,fontWeight:400,color:C.mt,textAlign:"center"},
+  authField:{marginBottom:"1rem"},
+  authBtn:{width:"100%",background:C.ac,border:"none",color:"#fff",padding:"10px 16px",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:600,fontFamily:fs,marginTop:"0.5rem"},
+  authError:{color:"#d32f2f",fontSize:13,margin:"0.5rem 0 0",padding:0,textAlign:"center"},
+  authMessage:{color:C.tx,fontSize:14,lineHeight:1.5,textAlign:"center",margin:"1rem 0 1.5rem"},
+  authLink:{textAlign:"center",fontSize:13,color:C.mt,margin:"1rem 0 0"},
+  authLinkBtn:{background:"none",border:"none",color:C.ac,cursor:"pointer",textDecoration:"underline",fontSize:13,fontFamily:fs},
+  // Modal styles
+  modalOverlay:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"20px"},
+  modalContent:{background:"#fff",borderRadius:12,maxWidth:600,width:"100%",maxHeight:"90vh",overflow:"hidden",boxShadow:"0 10px 30px rgba(0,0,0,0.2)"},
+  modalHeader:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 24px",borderBottom:`1px solid ${C.bd}`},
+  modalTitle:{margin:0,fontSize:18,fontWeight:600,color:C.tx},
+  modalCloseBtn:{background:"none",border:"none",fontSize:24,color:C.mt,cursor:"pointer",padding:0,lineHeight:1},
+  modalBody:{padding:"20px 24px",maxHeight:"70vh",overflowY:"auto"},
+  userSection:{marginBottom:"2rem"},
+  sectionTitle:{fontSize:14,fontWeight:600,color:C.ac,marginBottom:"1rem",textTransform:"uppercase",letterSpacing:"0.05em"},
+  userItem:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:C.bl,borderRadius:8,marginBottom:"0.5rem"},
+  userInfo:{display:"flex",flexDirection:"column",gap:"4px"},
+  userEmail:{fontSize:12,color:C.mt},
+  userDate:{fontSize:12,color:C.mt},
+  userRole:{fontSize:12,color:C.ac,fontWeight:500},
+  userActions:{display:"flex",alignItems:"center",gap:"8px"},
+  approveBtn:{background:"#4CAF50",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
+  rejectBtn:{background:"#f44336",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
+  removeBtn:{background:"#ff9800",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
+  roleSelect:{padding:"6px 8px",borderRadius:6,border:`1px solid ${C.bd}`,fontSize:12,fontFamily:fs,marginRight:"8px"},
   container:{background:C.bg,minHeight:"100vh",fontFamily:fs,color:C.tx},
   toolbar:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:C.ac,color:"#fff",position:"sticky",top:0,zIndex:100,flexWrap:"wrap",gap:6},
   tbLeft:{display:"flex",alignItems:"center"},tbRight:{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"},
   appTitle:{margin:0,fontSize:17,fontFamily:ff,fontWeight:600,letterSpacing:"0.02em"},
+  userInfo:{color:"rgba(255,255,255,0.8)",fontSize:12,fontFamily:fs,padding:"0 8px"},
   toolBtn:{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",color:"#fff",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
   saveBtn:{background:"#fff",border:"none",color:C.ac,padding:"5px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs,minWidth:72},
   formBody:{maxWidth:680,margin:"0 auto",padding:"16px 14px 80px"},
@@ -1153,7 +1630,7 @@ const S = {
   pNameTextBold:{fontWeight:700,color:C.tx,fontSize:15},
   pCallingTextClean:{fontWeight:400,color:C.tx,fontSize:15},
   pSection:{marginBottom:24,paddingBottom:16,borderBottom:`2px solid ${C.bd}`,pageBreakInside:"avoid"},
-  pSectionTitle:{fontSize:18,fontWeight:600,color:C.ac,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:"center",background:`linear-gradient(135deg, ${C.ac} 0%, #5a7ba0 100%)`,color:"#fff",padding:"8px 16px",borderRadius:8,fontFamily:fs},
+  pSectionTitle:{fontSize:18,fontWeight:600,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:"center",background:`linear-gradient(135deg, ${C.ac} 0%, #5a7ba0 100%)`,color:"#fff",padding:"8px 16px",borderRadius:8,fontFamily:fs},
   pReadingText:{padding:"8px 12px",margin:"4px 0",fontSize:14,color:C.tx,lineHeight:1.6,fontStyle:"italic",background:C.bl,borderRadius:6},
   pWaitText:{padding:"4px 12px",margin:"2px 0",fontSize:12,color:C.mt,fontWeight:600,fontStyle:"normal",textAlign:"center",background:"#f8f8f8",borderRadius:4},
 };
