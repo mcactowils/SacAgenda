@@ -94,7 +94,7 @@ const NameDropdown = memo(({ label, value, options, onChange }) => (
     <label style={S.fieldLabel}>{label}</label>
     <select style={S.input} value={value} onChange={e => onChange(e.target.value)}>
       <option value="">— Select {label} —</option>
-      {options.map(name => (
+      {[...options].sort((a, b) => a.localeCompare(b)).map(name => (
         <option key={name} value={name}>{name}</option>
       ))}
     </select>
@@ -1510,8 +1510,8 @@ const S = {
   formBody: { padding: "24px", maxWidth: "800px", margin: "0 auto" },
   fieldGroup: { marginBottom: "20px" },
   fieldLabel: { display: "block", marginBottom: "6px", fontWeight: "600", color: C.tx, fontSize: "14px" },
-  input: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs },
-  ta: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs, resize: "vertical" },
+  input: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs, height: "40px", boxSizing: "border-box" },
+  ta: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs, resize: "vertical", boxSizing: "border-box" },
   fRow: { display: "flex", gap: "16px", marginBottom: "12px" },
   fHalf: { flex: 1 },
   section: { border: `1px solid ${C.bd}`, borderRadius: "8px", marginBottom: "16px", overflow: "hidden" },
@@ -1529,21 +1529,21 @@ const S = {
   bizSub: { marginBottom: "16px" },
   subLabel: { fontWeight: "600", marginBottom: "8px", color: C.tx },
   listRow: { display: "flex", gap: "8px", marginBottom: "8px", alignItems: "center" },
-  listIn: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px" },
-  listFull: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px" },
+  listIn: { flex: 1, padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", height: "40px", boxSizing: "border-box" },
+  listFull: { flex: 1, padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", height: "40px", boxSizing: "border-box" },
   addBtn: { padding: "6px 12px", border: `1px solid ${C.ac}`, borderRadius: "4px", background: C.fg, color: C.ac, cursor: "pointer", fontSize: "12px", fontFamily: fs },
   rmBtn: { padding: "4px 8px", border: `1px solid #dc3545`, borderRadius: "4px", background: "#dc3545", color: C.fg, cursor: "pointer", fontSize: "12px" },
   speakerBlock: { marginBottom: "12px", padding: "8px", border: `1px solid ${C.bd}`, borderRadius: "4px", backgroundColor: C.bg },
   intermediateRow: { marginTop: "8px", fontSize: "12px" },
   intermediateLabel: { display: "block", marginBottom: "4px", color: C.mt, fontSize: "12px" },
-  intermediateSelect: { padding: "4px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px", marginBottom: "4px" }
+  intermediateSelect: { padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", marginBottom: "4px", height: "40px", boxSizing: "border-box" }
 };
 
 const A = {
   container: { display: "flex", justifyContent: "center", alignItems: "center", minHeight: "100vh", backgroundColor: C.bg, fontFamily: fs },
   form: { backgroundColor: C.fg, padding: "32px", borderRadius: "8px", boxShadow: "0 4px 6px rgba(0,0,0,0.1)", width: "100%", maxWidth: "400px" },
   title: { textAlign: "center", marginBottom: "24px", color: C.tx, fontSize: "24px", fontWeight: "600" },
-  input: { width: "100%", padding: "12px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", marginBottom: "16px", fontFamily: fs },
+  input: { width: "100%", padding: "12px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", marginBottom: "16px", fontFamily: fs, height: "48px", boxSizing: "border-box" },
   button: { width: "100%", padding: "12px", backgroundColor: C.ac, color: C.fg, border: "none", borderRadius: "6px", fontSize: "16px", fontWeight: "600", cursor: "pointer", fontFamily: fs },
   error: { backgroundColor: "#f8d7da", color: "#721c24", padding: "8px", borderRadius: "4px", marginBottom: "16px", fontSize: "14px" },
   switchText: { textAlign: "center", marginTop: "16px", color: C.mt, fontSize: "14px" },
@@ -1571,9 +1571,9 @@ const M = {
   nameTag: { display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: C.bl, borderRadius: "4px", fontSize: "12px" },
   nameRemove: { background: "none", border: "none", color: "#dc3545", cursor: "pointer", fontSize: "14px", padding: "0", width: "16px", height: "16px" },
   addRow: { display: "flex", gap: "8px", alignItems: "center" },
-  addInput: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs },
+  addInput: { flex: 1, padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs, height: "40px", boxSizing: "border-box" },
   addBtnS: { padding: "6px 12px", border: `1px solid ${C.ac}`, borderRadius: "4px", background: C.ac, color: C.fg, cursor: "pointer", fontSize: "12px", fontFamily: fs },
-  input: { width: "100%", padding: "8px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs },
+  input: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs, height: "40px", boxSizing: "border-box" },
   csvSection: { marginBottom: "16px", padding: "12px", backgroundColor: C.bg, borderRadius: "6px" },
   csvLabel: { fontWeight: "600", marginBottom: "8px", color: C.tx },
   csvInput: { width: "100%", padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px" },
@@ -1590,7 +1590,7 @@ const M = {
   userName: { fontWeight: "600", color: C.tx, fontSize: "14px" },
   userDetails: { fontSize: "12px", color: C.mt, marginTop: "2px" },
   userActions: { display: "flex", gap: "8px", alignItems: "center" },
-  roleSelect: { padding: "4px 8px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px", fontFamily: fs },
+  roleSelect: { padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs, height: "40px", boxSizing: "border-box" },
   approveBtn: { padding: "4px 8px", background: "#28a745", color: C.fg, border: "none", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontFamily: fs },
   removeBtn: { padding: "4px 8px", background: "#dc3545", color: C.fg, border: "none", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontFamily: fs },
   emptyState: { textAlign: "center", color: C.mt, fontStyle: "italic", padding: "16px" }

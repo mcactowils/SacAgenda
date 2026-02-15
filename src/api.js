@@ -1,6 +1,8 @@
 // API client for backend communication
 
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = process.env.NODE_ENV === 'production'
+  ? `${window.location.protocol}//${window.location.host}/api`
+  : 'http://localhost:3001/api';
 
 class ApiClient {
   constructor() {
@@ -194,7 +196,12 @@ export function connectWebSocket() {
   }
 
   try {
-    ws = new WebSocket('ws://localhost:3001');
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = process.env.NODE_ENV === 'production'
+      ? `${wsProtocol}//${window.location.host}`
+      : 'ws://localhost:3001';
+
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       console.log('🔌 WebSocket connected');
