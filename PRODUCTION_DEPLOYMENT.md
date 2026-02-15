@@ -2,9 +2,48 @@
 
 ## Frontend Configuration
 
-The frontend now automatically detects production environment and uses the correct API endpoints:
-- **Development**: Uses `http://localhost:3001/api` and `ws://localhost:3001`
-- **Production**: Uses `https://yourdomain.com/api` and `wss://yourdomain.com`
+The frontend automatically detects the environment and configures API endpoints:
+
+### Development (localhost)
+- **API**: `http://localhost:3001/api`
+- **WebSocket**: `ws://localhost:3001`
+
+### Production Options
+
+1. **Automatic Detection** (default):
+   - **API**: `https://yourdomain.com/api`
+   - **WebSocket**: `wss://yourdomain.com`
+
+2. **Manual Configuration** (recommended):
+   Set these variables in `.env` before building:
+   ```bash
+   VITE_API_URL=https://your-api-server.com/api
+   VITE_WS_URL=wss://your-websocket-server.com
+   ```
+
+### Common Production Scenarios
+
+#### Same Domain Deployment
+If frontend and backend are on the same domain:
+```bash
+# .env (leave empty for automatic detection)
+VITE_API_URL=
+VITE_WS_URL=
+```
+
+#### Separate Backend Server (Railway, Render, etc.)
+```bash
+# .env
+VITE_API_URL=https://your-backend.railway.app/api
+VITE_WS_URL=wss://your-backend.railway.app
+```
+
+#### API Subdomain
+```bash
+# .env
+VITE_API_URL=https://api.yourdomain.com/api
+VITE_WS_URL=wss://api.yourdomain.com
+```
 
 ## Server Environment Variables
 

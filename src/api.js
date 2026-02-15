@@ -1,8 +1,24 @@
 // API client for backend communication
 
-const API_BASE_URL = process.env.NODE_ENV === 'production'
-  ? `${window.location.protocol}//${window.location.host}/api`
-  : 'http://localhost:3001/api';
+// API Base URL - detects environment automatically
+const API_BASE_URL = (() => {
+  // If environment variable is provided, use it
+  if (import.meta.env.VITE_API_URL) {
+    console.log(`🔧 Using configured API URL: ${import.meta.env.VITE_API_URL}`);
+    return import.meta.env.VITE_API_URL;
+  }
+
+  // If we're on localhost, always use the development server
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    console.log('🔧 Using development API URL: http://localhost:3001/api');
+    return 'http://localhost:3001/api';
+  }
+
+  // For production, assume API is on same domain with /api path
+  const productionUrl = `${window.location.protocol}//${window.location.host}/api`;
+  console.log(`🔧 Using auto-detected API URL: ${productionUrl}`);
+  return productionUrl;
+})();
 
 class ApiClient {
   constructor() {
@@ -196,10 +212,21 @@ export function connectWebSocket() {
   }
 
   try {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = process.env.NODE_ENV === 'production'
-      ? `${wsProtocol}//${window.location.host}`
-      : 'ws://localhost:3001';
+    const wsUrl = (() => {
+      // If environment variable is provided, use it
+      if (import.meta.env.VITE_WS_URL) {
+        return import.meta.env.VITE_WS_URL;
+      }
+
+      // If we're on localhost, always use the development server
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        return 'ws://localhost:3001';
+      }
+
+      // For production, use secure WebSocket and same host
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${wsProtocol}//${window.location.host}`;
+    })();
 
     ws = new WebSocket(wsUrl);
 
