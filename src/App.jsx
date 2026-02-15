@@ -186,6 +186,37 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
     setHymns(p => { const n = { ...p }; delete n[num]; return n; });
   };
 
+  const parseCsvLine = (line) => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          // Handle escaped quotes ""
+          current += '"';
+          i++; // Skip next quote
+        } else {
+          // Toggle quote state
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        // End of field
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    // Add the last field
+    result.push(current.trim());
+    return result;
+  };
+
   const handleCsvUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -197,10 +228,10 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
       const newHymns = {};
 
       lines.forEach(line => {
-        const parts = line.split(',').map(part => part.trim().replace(/"/g, ''));
+        const parts = parseCsvLine(line);
         if (parts.length >= 2) {
-          const number = parts[0];
-          const title = parts[1];
+          const number = parts[0].replace(/"/g, '').trim();
+          const title = parts[1].replace(/"/g, '').trim();
           if (number && title) {
             newHymns[number] = title;
           }
