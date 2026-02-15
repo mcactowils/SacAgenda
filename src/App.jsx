@@ -156,12 +156,13 @@ const NameDropdown = memo(function NameDropdown({ label, value, options, onChang
 // ── SETTINGS MODAL (names + hymns) ──
 function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, onSaveHymns }) {
   const [groups, setGroups] = useState(nameGroups);
-  const [newName, setNewName] = useState({ leadership: "", chorister: "", organist: "" });
+  const [newName, setNewName] = useState({ presiding: "", conducting: "", chorister: "", organist: "" });
   const [hymns, setHymns] = useState(customHymns);
   const [newHymn, setNewHymn] = useState({ number: "", title: "" });
+  const [csvFile, setCsvFile] = useState(null);
   const [tab, setTab] = useState("names"); // names | hymns
 
-  useEffect(() => { setGroups(nameGroups); setHymns(customHymns); }, [nameGroups, customHymns]);
+  useEffect(() => { setGroups(nameGroups); setHymns(customHymns); setCsvFile(null); }, [nameGroups, customHymns]);
 
   if (!isOpen) return null;
 
@@ -184,10 +185,41 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
   const removeHymn = (num) => {
     setHymns(p => { const n = { ...p }; delete n[num]; return n; });
   };
+
+  const handleCsvUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target.result;
+      const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+      const newHymns = {};
+
+      lines.forEach(line => {
+        const parts = line.split(',').map(part => part.trim().replace(/"/g, ''));
+        if (parts.length >= 2) {
+          const number = parts[0];
+          const title = parts[1];
+          if (number && title) {
+            newHymns[number] = title;
+          }
+        }
+      });
+
+      if (Object.keys(newHymns).length > 0) {
+        setHymns(p => ({ ...p, ...newHymns }));
+        setCsvFile(null);
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
   const handleSave = () => { onSaveNames(groups); onSaveHymns(hymns); onClose(); };
 
   const nameCfgs = {
-    leadership: { label: "Presiding / Conducting", hint: "Bishopric members, stake leaders, visiting authorities" },
+    presiding: { label: "Presiding", hint: "Bishopric members, stake leaders, visiting authorities" },
+    conducting: { label: "Conducting", hint: "Bishopric members, stake leaders, visiting authorities" },
     chorister: { label: "Choristers", hint: "Ward chorister(s)" },
     organist: { label: "Organists", hint: "Ward organist(s) / pianist(s)" },
   };
@@ -231,6 +263,15 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
           {tab === "hymns" && (
             <div>
               <p style={M.groupHint}>Add new hymns from "Hymns—For Home and Church" or other sources as they're released. These supplement the built-in 1985 hymnal.</p>
+
+              <div style={M.csvSection}>
+                <div style={M.csvLabel}>Upload CSV File</div>
+                <p style={{ ...M.groupHint, marginBottom: 8 }}>Upload a CSV file with hymn numbers and titles (format: number,title)</p>
+                <input type="file" accept=".csv" onChange={handleCsvUpload} style={M.csvInput} />
+              </div>
+
+              <div style={M.divider}>OR</div>
+
               <div style={{ ...M.addRow, marginBottom: 12 }}>
                 <input style={{ ...M.addInput, width: 70, flex: "none" }} type="text" placeholder="#"
                   value={newHymn.number} onChange={e => setNewHymn(p => ({ ...p, number: e.target.value }))} />
@@ -268,7 +309,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
 // ── MAIN APP ──
 export default function App() {
   const [agenda, setAgenda] = useState(null);
-  const [nameGroups, setNameGroups] = useState({ leadership: [], chorister: [], organist: [] });
+  const [nameGroups, setNameGroups] = useState({ presiding: [], conducting: [], chorister: [], organist: [] });
   const [customHymns, setCustomHymns] = useState({});
   const [allHymns, setAllHymns] = useState(DEFAULT_HYMNS);
   const [savedAgendas, setSavedAgendas] = useState([]);
@@ -292,10 +333,14 @@ export default function App() {
   useEffect(() => {
     async function init() {
       try {
-        let names = { leadership: [], chorister: [], organist: [] };
+        let names = { presiding: [], conducting: [], chorister: [], organist: [] };
         try { const r = await storage.get("agenda-name-groups"); if (r?.value) names = JSON.parse(r.value); } catch {}
+        // Migrate old "leadership" key to separate presiding/conducting
+        if (names.leadership && !names.presiding) { names.presiding = [...names.leadership]; names.conducting = [...names.leadership]; delete names.leadership; }
         // Migrate old "music" key if present
         if (names.music && !names.chorister) { names.chorister = names.music; names.organist = [...names.music]; delete names.music; }
+        if (!names.presiding) names.presiding = [];
+        if (!names.conducting) names.conducting = [];
         if (!names.chorister) names.chorister = [];
         if (!names.organist) names.organist = [];
         setNameGroups(names);
@@ -567,8 +612,8 @@ export default function App() {
 
         <div style={S.fieldGroup}>
           <div style={S.fRow}>
-            <div style={S.fHalf}><NameDropdown label="Presiding" value={agenda.presiding} options={nameGroups.leadership || []} onChange={v => updateField("presiding", v)} /></div>
-            <div style={S.fHalf}><NameDropdown label="Conducting" value={agenda.conducting} options={nameGroups.leadership || []} onChange={v => updateField("conducting", v)} /></div>
+            <div style={S.fHalf}><NameDropdown label="Presiding" value={agenda.presiding} options={nameGroups.presiding || []} onChange={v => updateField("presiding", v)} /></div>
+            <div style={S.fHalf}><NameDropdown label="Conducting" value={agenda.conducting} options={nameGroups.conducting || []} onChange={v => updateField("conducting", v)} /></div>
           </div>
           <div style={S.fRow}>
             <div style={S.fHalf}><NameDropdown label="Chorister" value={agenda.chorister} options={nameGroups.chorister || []} onChange={v => updateField("chorister", v)} /></div>
@@ -743,6 +788,10 @@ const M = {
   hymnList:{maxHeight:300,overflowY:"auto"},
   hymnItem:{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:`1px solid ${C.bl}`},
   hymnNum:{color:C.ac,fontWeight:600,fontSize:13,minWidth:40},hymnTitle:{flex:1,fontSize:13,color:C.tx},
+  csvSection:{marginBottom:16,padding:12,background:C.bl,borderRadius:8},
+  csvLabel:{fontSize:13,fontWeight:600,color:C.tx,marginBottom:4},
+  csvInput:{width:"100%",padding:"6px 10px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:13,fontFamily:fs,cursor:"pointer"},
+  divider:{textAlign:"center",margin:"16px 0",position:"relative",color:C.mt,fontSize:12,fontWeight:600},
   footer:{display:"flex",justifyContent:"flex-end",gap:8,padding:"12px 20px",borderTop:`1px solid ${C.bd}`},
   cancelBtn:{background:"none",border:`1px solid ${C.bd}`,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs,color:C.tx},
   saveBtn:{background:C.ac,color:"#fff",border:"none",padding:"6px 16px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs},
