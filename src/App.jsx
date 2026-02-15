@@ -26,11 +26,14 @@ const EMPTY_AGENDA = {
     other: "",
   },
   sacramentHymn: { number: "", title: "" },
-  speakers: [{ name: "", topic: "" }],
-  youthSpeakers: [{ name: "", topic: "" }],
+  speakers: [{ name: "" }],
+  youthSpeakers: [{ name: "" }],
   musicalNumbers: [{ performer: "", title: "" }],
-  intermediateHymn: { number: "", title: "" },
+  intermediateItem: { type: "hymn", number: "", title: "", performer: "", placement: "after-youth" }, // type: "hymn" or "musical", placement: after-youth, after-speaker-1, etc.
   closingHymn: { number: "", title: "" },
+  isFastSunday: false,
+  isEaster: false,
+  isChristmas: false,
   benediction: "",
   announcements: "",
   isPrimaryProgram: false,
@@ -38,8 +41,8 @@ const EMPTY_AGENDA = {
 };
 
 const BIZ_SECTIONS = {
-  callings: { itemLabel: "Calling", fields: ["name", "calling"], labels: ["Name", "Calling"] },
   releases: { itemLabel: "Release", fields: ["name", "calling"], labels: ["Name", "Calling"] },
+  callings: { itemLabel: "Sustaining", fields: ["name", "calling"], labels: ["Name", "Calling"] },
   ordinations: { itemLabel: "Ordination", fields: ["name", "office"], labels: ["Name", "Office"] },
   babyBlessings: { itemLabel: "Baby Blessing", fields: ["name"], labels: ["Name"] },
   confirmations: { itemLabel: "Confirmation", fields: ["name"], labels: ["Name"] },
@@ -560,33 +563,275 @@ export default function App() {
             ))}
           </div>
           <div style={S.printDiv} />
-          {agenda.announcements?.trim() && <div style={{ ...S.pItem, flexDirection: "column" }}><span style={S.pItemL}>Announcements</span><p style={S.pNote}>{agenda.announcements}</p></div>}
-          <HL label="Opening Hymn" h={agenda.openingHymn} />
-          <div style={S.pItem}><span style={S.pItemL}>Invocation</span><span style={S.pItemV}>{agenda.invocation || "—"}</span></div>
+          {agenda.announcements?.trim() && (
+            <div style={{ ...S.pItem, flexDirection: "column" }}>
+              <span style={S.pItemL}>Announcements</span>
+              <div style={S.pAnnouncements}>
+                {agenda.announcements.split('\n').filter(line => line.trim()).map((line, i) => (
+                  <div key={i} style={S.pAnnouncementItem}>
+                    <span style={S.pBullet}>•</span>
+                    <span style={S.pAnnouncementText}>{line.trim()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={S.pSection}>
+            <div style={S.pSectionTitle}>Opening</div>
+
+            {/* Dynamic opening text */}
+            {(agenda.openingHymn?.number || agenda.openingHymn?.title || agenda.invocation) && (
+              <div style={S.pOpeningText}>
+                We will open our meeting by singing Hymn{" "}
+                {agenda.openingHymn?.number && `#${agenda.openingHymn.number}`}
+                {agenda.openingHymn?.number && agenda.openingHymn?.title && " "}
+                {agenda.openingHymn?.title && `"${agenda.openingHymn.title}"`}
+                {agenda.invocation && `, after which ${agenda.invocation} will offer the invocation`}.
+              </div>
+            )}
+
+            <HL label="Opening Hymn" h={agenda.openingHymn} />
+            <div style={S.pItem}><span style={S.pItemL}>Invocation</span><span style={S.pItemV}>{agenda.invocation || "—"}</span></div>
+          </div>
           {hasBiz && (
-            <div style={S.pBizSec}>
-              <span style={S.pSecT}>Ward Business</span>
+            <div style={S.pSection}>
+              <div style={S.pSectionTitle}>Ward Business</div>
               {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => {
                 const items = agenda.wardBusiness[key]?.filter(it => Object.values(it).some(v => v?.trim()));
                 if (!items?.length) return null;
-                return (<div key={key} style={S.pBizGrp}><span style={S.pBizLbl}>{cfg.itemLabel}s</span>
-                  {items.map((it, i) => <div key={i} style={S.pBizItem}>{cfg.fields.map(f => it[f]).filter(Boolean).join(" — ")}</div>)}</div>);
+
+                if (key === 'releases') {
+                  return (
+                    <div key={key} style={S.pBizSubSection}>
+                      <div style={S.pSubSectionHeader}>Releases</div>
+                      <div style={S.pReadingText}>
+                        A release has been extended to the following individual{items.length > 1 ? 's' : ''}:
+                      </div>
+                      {items.map((it, i) => (
+                        <div key={i} style={S.pNameItemClean}>
+                          <span style={S.pNameTextBold}>{it.name}</span>
+                          {it.calling && <span style={S.pCallingTextClean}> — {it.calling}</span>}
+                        </div>
+                      ))}
+                      <div style={S.pReadingText}>
+                        Those who wish to express thanks for their service may show it by the uplifted hand.
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (key === 'callings') {
+                  return (
+                    <div key={key} style={S.pBizSubSection}>
+                      <div style={S.pSubSectionHeader}>Sustainings</div>
+                      <div style={S.pReadingText}>
+                        We propose that the following individual{items.length > 1 ? 's' : ''} be sustained. As your name is read please stand:
+                      </div>
+                      {items.map((it, i) => (
+                        <div key={i} style={S.pNameItemClean}>
+                          <span style={S.pNameTextBold}>{it.name}</span>
+                          {it.calling && <span style={S.pCallingTextClean}> — {it.calling}</span>}
+                        </div>
+                      ))}
+                      <div style={S.pReadingText}>
+                        Those in favor show it by the uplifted hand.
+                      </div>
+                      <div style={S.pWaitText}>[Wait]</div>
+                      <div style={S.pReadingText}>
+                        Those opposed, if any, may show it.
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (key === 'ordinations') {
+                  // Group ordinations by office
+                  const groupedByOffice = items.reduce((acc, item) => {
+                    const office = item.office || 'Unknown';
+                    if (!acc[office]) acc[office] = [];
+                    acc[office].push(item);
+                    return acc;
+                  }, {});
+
+                  return (
+                    <div key={key} style={S.pBizSubSection}>
+                      <div style={S.pSubSectionHeader}>Ordinations</div>
+                      {Object.entries(groupedByOffice).map(([office, officeItems], groupIndex) => {
+                        const isDeacon = office === 'Deacon';
+                        const names = officeItems.map(item => item.name).filter(Boolean);
+
+                        if (names.length === 0) return null;
+
+                        return (
+                          <div key={office} style={{marginBottom: groupIndex < Object.keys(groupedByOffice).length - 1 ? 16 : 0}}>
+                            <div style={S.pReadingText}>
+                              We propose that {names.join(', ')}{isDeacon ? ' receive the Aaronic Priesthood and' : ''} be ordained to the office of {office} in the Aaronic Priesthood.
+                            </div>
+                            {names.map((name, i) => (
+                              <div key={i} style={S.pNameItemClean}>
+                                <span style={S.pNameTextBold}>{name}</span>
+                              </div>
+                            ))}
+                            <div style={S.pReadingText}>
+                              Those in favor may manifest it.
+                            </div>
+                            <div style={S.pWaitText}>[Wait]</div>
+                            <div style={S.pReadingText}>
+                              Those opposed, if any, may manifest it.
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={key} style={S.pBizSubSection}>
+                    <div style={S.pSubSectionHeader}>{cfg.itemLabel}s</div>
+                    {items.map((it, i) => (
+                      <div key={i} style={S.pNameItemClean}>
+                        <span style={S.pNameTextBold}>{cfg.fields.map(f => it[f]).filter(Boolean).join(" — ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
               })}
-              {agenda.wardBusiness.other?.trim() && <div style={S.pBizGrp}><span style={S.pBizLbl}>Other</span><div style={S.pBizItem}>{agenda.wardBusiness.other}</div></div>}
+              {agenda.wardBusiness.other?.trim() && (
+                <div style={S.pBizSubSection}>
+                  <div style={S.pSubSectionHeader}>Other</div>
+                  <div style={S.pAnnouncements}>
+                    {agenda.wardBusiness.other.split('\n').filter(line => line.trim()).map((line, i) => (
+                      <div key={i} style={S.pAnnouncementItem}>
+                        <span style={S.pBullet}>•</span>
+                        <span style={S.pAnnouncementText}>{line.trim()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          <HL label="Sacrament Hymn" h={agenda.sacramentHymn} />
-          <div style={S.pItem}><span style={S.pItemL}>Administration of the Sacrament</span></div>
-          {agenda.isPrimaryProgram ? (
-            <div style={S.pBizSec}><span style={S.pSecT}>Primary Program</span>{agenda.primaryProgramNotes && <p style={S.pNote}>{agenda.primaryProgramNotes}</p>}</div>
-          ) : (<>
-            {agenda.youthSpeakers.filter(s => s.name?.trim()).map((s, i) => <div key={`ys${i}`} style={S.pItem}><span style={S.pItemL}>Youth Speaker</span><span style={S.pItemV}>{s.name}{s.topic ? ` — ${s.topic}` : ""}</span></div>)}
-            {agenda.speakers.filter(s => s.name?.trim()).map((s, i) => <div key={`sp${i}`} style={S.pItem}><span style={S.pItemL}>Speaker</span><span style={S.pItemV}>{s.name}{s.topic ? ` — ${s.topic}` : ""}</span></div>)}
-            {agenda.musicalNumbers.filter(m => m.performer?.trim() || m.title?.trim()).map((m, i) => <div key={`mn${i}`} style={S.pItem}><span style={S.pItemL}>Musical Number</span><span style={S.pItemV}>{m.title}{m.title && m.performer ? " — " : ""}{m.performer}</span></div>)}
-          </>)}
-          <HL label="Intermediate Hymn" h={agenda.intermediateHymn} />
-          <HL label="Closing Hymn" h={agenda.closingHymn} />
-          <div style={S.pItem}><span style={S.pItemL}>Benediction</span><span style={S.pItemV}>{agenda.benediction || "—"}</span></div>
+          <div style={S.pSection}>
+            <div style={S.pSectionTitle}>Sacrament</div>
+
+            {/* Dynamic sacrament preparation text */}
+            {(agenda.sacramentHymn?.number || agenda.sacramentHymn?.title) && (
+              <div style={S.pReadingText}>
+                We will prepare for the sacrament by singing Hymn{" "}
+                {agenda.sacramentHymn?.number && `#${agenda.sacramentHymn.number}`}
+                {agenda.sacramentHymn?.number && agenda.sacramentHymn?.title && " "}
+                {agenda.sacramentHymn?.title && `"${agenda.sacramentHymn.title}"`}
+                {" "}after which the holders of the Aaronic Priesthood will administer and pass the sacrament.
+              </div>
+            )}
+
+            <HL label="Sacrament Hymn" h={agenda.sacramentHymn} />
+            <div style={S.pItem}><span style={S.pItemL}>Administration of the Sacrament</span></div>
+          </div>
+          <div style={S.pReadingText}>
+            Thank you for your reverence during the sacrament ordinance.
+          </div>
+          <div style={S.pSection}>
+            {agenda.isPrimaryProgram ? (
+              <>
+                <div style={S.pSectionTitle}>Primary Program</div>
+                {agenda.primaryProgramNotes && <p style={S.pNote}>{agenda.primaryProgramNotes}</p>}
+              </>
+            ) : agenda.isFastSunday ? (
+              <>
+                <div style={S.pSectionTitle}>Testimony Meeting</div>
+                <div style={S.pNote}>
+                  Note: The conducting counselor will share their testimony, after which the floor will be opened for others to bear their testimonies.
+                </div>
+                <div style={S.pReadingText}>
+                  The remainder of the time is for the bearing of testimonies. We invite you to come forward and share your testimony, or stand and an Aaronic Priesthood holder will bring a microphone to you. We will plan to conclude at 5 minutes before the hour.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={S.pSectionTitle}>Program</div>
+                {(() => {
+                  const youthSpeakers = agenda.youthSpeakers.filter(s => s.name?.trim());
+                  const speakers = agenda.speakers.filter(s => s.name?.trim());
+                  const musicalNumbers = agenda.musicalNumbers.filter(m => m.performer?.trim() || m.title?.trim());
+                  const intermediateItem = agenda.intermediateItem;
+                  const items = [];
+
+                  const renderIntermediateItem = () => {
+                    if (!intermediateItem || (!intermediateItem.number && !intermediateItem.title && !intermediateItem.performer)) return null;
+
+                    if (intermediateItem.type === "hymn") {
+                      return (
+                        <div key="intermediate-item" style={S.pItem}>
+                          <span style={S.pItemL}>Intermediate Hymn</span>
+                          <span style={S.pItemV}>{intermediateItem.number && `#${intermediateItem.number}`}{intermediateItem.number && intermediateItem.title && " — "}{intermediateItem.title}</span>
+                        </div>
+                      );
+                    } else {
+                      return (
+                        <div key="intermediate-item" style={S.pItem}>
+                          <span style={S.pItemL}>Musical Number</span>
+                          <span style={S.pItemV}>{intermediateItem.title}{intermediateItem.title && intermediateItem.performer ? " — " : ""}{intermediateItem.performer}</span>
+                        </div>
+                      );
+                    }
+                  };
+
+                  // Add youth speakers
+                  youthSpeakers.forEach((s, i) => {
+                    items.push(<div key={`ys${i}`} style={S.pItem}><span style={S.pItemL}>Youth Speaker</span><span style={S.pItemV}>{s.name}</span></div>);
+                  });
+
+                  // Check for intermediate item after youth speakers
+                  if (intermediateItem?.placement === "after-youth") {
+                    const item = renderIntermediateItem();
+                    if (item) items.push(item);
+                  }
+
+                  // Add speakers with potential intermediate item placement
+                  speakers.forEach((s, i) => {
+                    items.push(<div key={`sp${i}`} style={S.pItem}><span style={S.pItemL}>Speaker</span><span style={S.pItemV}>{s.name}</span></div>);
+
+                    // Check for intermediate item after this speaker
+                    if (intermediateItem?.placement === `after-speaker-${i + 1}`) {
+                      const item = renderIntermediateItem();
+                      if (item) items.push(item);
+                    }
+                  });
+
+                  // Add regular musical numbers (not the intermediate one)
+                  musicalNumbers.forEach((m, i) => {
+                    items.push(<div key={`mn${i}`} style={S.pItem}><span style={S.pItemL}>Musical Number</span><span style={S.pItemV}>{m.title}{m.title && m.performer ? " — " : ""}{m.performer}</span></div>);
+                  });
+
+                  return items;
+                })()}
+              </>
+            )}
+          </div>
+          <div style={S.pSection}>
+            <div style={S.pSectionTitle}>Closing</div>
+            {agenda.intermediateItem?.placement === "before-closing" && (agenda.intermediateItem.number || agenda.intermediateItem.title || agenda.intermediateItem.performer) && (
+              agenda.intermediateItem.type === "hymn" ? (
+                <div style={S.pItem}>
+                  <span style={S.pItemL}>Intermediate Hymn</span>
+                  <span style={S.pItemV}>{agenda.intermediateItem.number && `#${agenda.intermediateItem.number}`}{agenda.intermediateItem.number && agenda.intermediateItem.title && " — "}{agenda.intermediateItem.title}</span>
+                </div>
+              ) : (
+                <div style={S.pItem}>
+                  <span style={S.pItemL}>Musical Number</span>
+                  <span style={S.pItemV}>{agenda.intermediateItem.title}{agenda.intermediateItem.title && agenda.intermediateItem.performer ? " — " : ""}{agenda.intermediateItem.performer}</span>
+                </div>
+              )
+            )}
+            <div style={S.pReadingText}>
+              We appreciate those who have participated today. Thanks to our Chorister {agenda.chorister || "[Name]"} and our Organist {agenda.organist || "[Name]"} for the music. We will close by singing Hymn {agenda.closingHymn?.number && `#${agenda.closingHymn.number}`}{agenda.closingHymn?.number && agenda.closingHymn?.title && " "}{agenda.closingHymn?.title || "[Title]"}, after which {agenda.benediction || "[Name]"} will offer the benediction.
+            </div>
+            <HL label="Closing Hymn" h={agenda.closingHymn} />
+            <div style={S.pItem}><span style={S.pItemL}>Benediction</span><span style={S.pItemV}>{agenda.benediction || "—"}</span></div>
+          </div>
         </div>
         <style>{`@media print{.no-print{display:none!important}}`}</style>
       </div>
@@ -652,6 +897,14 @@ export default function App() {
           </div>
         </div>
 
+        <div style={S.fieldGroup}>
+          <label style={S.fieldLabel}>Announcements</label>
+          <textarea style={S.ta} rows={4}
+            placeholder="Ward announcements (each line becomes a bullet point)&#10;Example:&#10;Relief Society meeting this Thursday&#10;Youth activity Saturday at 10 AM&#10;Fast Sunday next week"
+            value={agenda.announcements}
+            onChange={e => updateField("announcements", e.target.value)} />
+        </div>
+
         <HymnInput label="Opening Hymn" hymn={agenda.openingHymn} onChange={v => updateField("openingHymn", v)} allHymns={allHymns} />
         <div style={S.fieldGroup}><label style={S.fieldLabel}>Invocation</label><input style={S.input} type="text" placeholder="Name" value={agenda.invocation} onChange={e => updateField("invocation", e.target.value)} /></div>
 
@@ -661,11 +914,30 @@ export default function App() {
               <div style={S.subLabel}>{cfg.itemLabel}s</div>
               {(agenda.wardBusiness[key] || []).map((item, idx) => (
                 <div key={`wb-${key}-${idx}`} style={S.listRow}>
-                  {cfg.fields.map(f => (
-                    <input key={`wb-${key}-${idx}-${f}`} style={cfg.fields.length === 1 ? S.listFull : S.listIn}
-                      type="text" placeholder={cfg.labels[cfg.fields.indexOf(f)]} value={item[f] || ""}
-                      onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)} />
-                  ))}
+                  {cfg.fields.map(f => {
+                    // Special handling for ordination office field
+                    if (key === 'ordinations' && f === 'office') {
+                      return (
+                        <select
+                          key={`wb-${key}-${idx}-${f}`}
+                          style={S.listIn}
+                          value={item[f] || ""}
+                          onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)}
+                        >
+                          <option value="">— Select Office —</option>
+                          <option value="Deacon">Deacon</option>
+                          <option value="Teacher">Teacher</option>
+                          <option value="Priest">Priest</option>
+                        </select>
+                      );
+                    }
+                    // Default input for other fields
+                    return (
+                      <input key={`wb-${key}-${idx}-${f}`} style={cfg.fields.length === 1 ? S.listFull : S.listIn}
+                        type="text" placeholder={cfg.labels[cfg.fields.indexOf(f)]} value={item[f] || ""}
+                        onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)} />
+                    );
+                  })}
                   <button style={S.rmBtn} type="button" onClick={() => removeListItem(`wardBusiness.${key}`, idx)}>✕</button>
                 </div>
               ))}
@@ -673,55 +945,125 @@ export default function App() {
             </div>
           ))}
           <div style={S.bizSub}><div style={S.subLabel}>Other Business</div>
-            <textarea style={S.ta} rows={2} placeholder="Any other ward business..." value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
+            <textarea style={S.ta} rows={3} placeholder="Other ward business (each line becomes a bullet point)&#10;Example:&#10;Stake conference next month&#10;Time change announcement" value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
         </Section>
 
         <HymnInput label="Sacrament Hymn" hymn={agenda.sacramentHymn} onChange={v => updateField("sacramentHymn", v)} allHymns={allHymns} />
 
-        <Section label="Primary Program" isOpen={expanded.primary} onToggle={() => toggle("primary")}>
-          <div style={S.chkRow}><input type="checkbox" id="pt" checked={agenda.isPrimaryProgram} onChange={e => updateField("isPrimaryProgram", e.target.checked)} style={S.chk} />
+        <Section label="Program Options" isOpen={expanded.primary} onToggle={() => toggle("primary")}>
+          <div style={S.chkRow}><input type="checkbox" id="fs" checked={agenda.isFastSunday} onChange={e => {
+            if (e.target.checked) {
+              setAgenda(prev => ({ ...prev, isFastSunday: true, isPrimaryProgram: false, isEaster: false, isChristmas: false }));
+            } else {
+              updateField("isFastSunday", false);
+            }
+          }} style={S.chk} />
+            <label htmlFor="fs" style={S.chkLbl}>This is Fast Sunday (testimony meeting)</label></div>
+
+          <div style={S.chkRow}><input type="checkbox" id="pt" checked={agenda.isPrimaryProgram} onChange={e => {
+            if (e.target.checked) {
+              setAgenda(prev => ({ ...prev, isPrimaryProgram: true, isFastSunday: false, isEaster: false, isChristmas: false }));
+            } else {
+              updateField("isPrimaryProgram", false);
+            }
+          }} style={S.chk} />
             <label htmlFor="pt" style={S.chkLbl}>This week is the Primary Program</label></div>
           {agenda.isPrimaryProgram && <textarea style={S.ta} rows={3} placeholder="Program notes..." value={agenda.primaryProgramNotes} onChange={e => updateField("primaryProgramNotes", e.target.value)} />}
-        </Section>
 
-        <Section label="Speakers" isOpen={expanded.speakers} onToggle={() => toggle("speakers")}>
-          {agenda.speakers.map((s, i) => (
-            <div key={`spk-${i}`} style={S.listRow}>
-              <input style={S.listIn} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`speakers.${i}.name`, e.target.value)} />
-              <input style={S.listIn} type="text" placeholder="Topic" value={s.topic} onChange={e => updateField(`speakers.${i}.topic`, e.target.value)} />
-              <button style={S.rmBtn} type="button" onClick={() => removeListItem("speakers", i)}>✕</button>
-            </div>
-          ))}
-          <button style={S.addBtn} type="button" onClick={() => addListItem("speakers", { name: "", topic: "" })}>+ Add Speaker</button>
+          <div style={S.chkRow}><input type="checkbox" id="es" checked={agenda.isEaster} onChange={e => {
+            if (e.target.checked) {
+              setAgenda(prev => ({ ...prev, isEaster: true, isFastSunday: false, isPrimaryProgram: false, isChristmas: false }));
+            } else {
+              updateField("isEaster", false);
+            }
+          }} style={S.chk} />
+            <label htmlFor="es" style={S.chkLbl}>This is Easter Sunday</label></div>
+
+          <div style={S.chkRow}><input type="checkbox" id="ch" checked={agenda.isChristmas} onChange={e => {
+            if (e.target.checked) {
+              setAgenda(prev => ({ ...prev, isChristmas: true, isFastSunday: false, isPrimaryProgram: false, isEaster: false }));
+            } else {
+              updateField("isChristmas", false);
+            }
+          }} style={S.chk} />
+            <label htmlFor="ch" style={S.chkLbl}>This is Christmas Sunday</label></div>
         </Section>
 
         <Section label="Youth Speakers" isOpen={expanded.youthSpeakers} onToggle={() => toggle("youthSpeakers")}>
           {agenda.youthSpeakers.map((s, i) => (
             <div key={`yspk-${i}`} style={S.listRow}>
-              <input style={S.listIn} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`youthSpeakers.${i}.name`, e.target.value)} />
-              <input style={S.listIn} type="text" placeholder="Topic" value={s.topic} onChange={e => updateField(`youthSpeakers.${i}.topic`, e.target.value)} />
+              <input style={S.listFull} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`youthSpeakers.${i}.name`, e.target.value)} />
               <button style={S.rmBtn} type="button" onClick={() => removeListItem("youthSpeakers", i)}>✕</button>
             </div>
           ))}
-          <button style={S.addBtn} type="button" onClick={() => addListItem("youthSpeakers", { name: "", topic: "" })}>+ Add Youth Speaker</button>
+          <button style={S.addBtn} type="button" onClick={() => addListItem("youthSpeakers", { name: "" })}>+ Add Youth Speaker</button>
         </Section>
 
-        <Section label="Musical Numbers / Special Items" isOpen={expanded.musicalNumbers} onToggle={() => toggle("musicalNumbers")}>
-          {agenda.musicalNumbers.map((m, i) => (
-            <div key={`mus-${i}`} style={S.listRow}>
-              <input style={S.listIn} type="text" placeholder="Title" value={m.title} onChange={e => updateField(`musicalNumbers.${i}.title`, e.target.value)} />
-              <input style={S.listIn} type="text" placeholder="Performer(s)" value={m.performer} onChange={e => updateField(`musicalNumbers.${i}.performer`, e.target.value)} />
-              <button style={S.rmBtn} type="button" onClick={() => removeListItem("musicalNumbers", i)}>✕</button>
+        <Section label="Speakers" isOpen={expanded.speakers} onToggle={() => toggle("speakers")}>
+          {agenda.speakers.map((s, i) => (
+            <div key={`spk-${i}`} style={S.listRow}>
+              <input style={S.listFull} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`speakers.${i}.name`, e.target.value)} />
+              <button style={S.rmBtn} type="button" onClick={() => removeListItem("speakers", i)}>✕</button>
             </div>
           ))}
-          <button style={S.addBtn} type="button" onClick={() => addListItem("musicalNumbers", { performer: "", title: "" })}>+ Add Musical Number</button>
+          <button style={S.addBtn} type="button" onClick={() => addListItem("speakers", { name: "" })}>+ Add Speaker</button>
         </Section>
 
-        <HymnInput label="Intermediate Hymn" hymn={agenda.intermediateHymn} onChange={v => updateField("intermediateHymn", v)} allHymns={allHymns} />
+        {(agenda.isEaster || agenda.isChristmas) && (
+          <Section label="Musical Numbers / Special Items" isOpen={expanded.musicalNumbers} onToggle={() => toggle("musicalNumbers")}>
+            {agenda.musicalNumbers.map((m, i) => (
+              <div key={`mus-${i}`} style={S.listRow}>
+                <input style={S.listIn} type="text" placeholder="Title" value={m.title} onChange={e => updateField(`musicalNumbers.${i}.title`, e.target.value)} />
+                <input style={S.listIn} type="text" placeholder="Performer(s)" value={m.performer} onChange={e => updateField(`musicalNumbers.${i}.performer`, e.target.value)} />
+                <button style={S.rmBtn} type="button" onClick={() => removeListItem("musicalNumbers", i)}>✕</button>
+              </div>
+            ))}
+            <button style={S.addBtn} type="button" onClick={() => addListItem("musicalNumbers", { performer: "", title: "" })}>+ Add Musical Number</button>
+          </Section>
+        )}
+
+        <div style={S.fieldGroup}>
+          <label style={S.fieldLabel}>Intermediate Item</label>
+          <div style={S.fRow}>
+            <div style={S.fHalf}>
+              <label style={S.fieldLabel}>Type</label>
+              <select style={S.select} value={agenda.intermediateItem?.type || "hymn"} onChange={e => updateField("intermediateItem.type", e.target.value)}>
+                <option value="hymn">Hymn</option>
+                <option value="musical">Musical Number</option>
+              </select>
+            </div>
+            <div style={S.fHalf}>
+              <label style={S.fieldLabel}>Placement</label>
+              <select style={S.select} value={agenda.intermediateItem?.placement || "after-youth"} onChange={e => updateField("intermediateItem.placement", e.target.value)}>
+                <option value="after-youth">After Youth Speakers</option>
+                {agenda.speakers.map((_, i) => (
+                  <option key={`after-speaker-${i + 1}`} value={`after-speaker-${i + 1}`}>After Speaker {i + 1}</option>
+                ))}
+                <option value="before-closing">Before Closing Hymn (traditional)</option>
+              </select>
+            </div>
+          </div>
+
+          {agenda.intermediateItem?.type === "hymn" ? (
+            <HymnInput label="Hymn" hymn={{ number: agenda.intermediateItem?.number || "", title: agenda.intermediateItem?.title || "" }}
+              onChange={v => { updateField("intermediateItem.number", v.number); updateField("intermediateItem.title", v.title); }} allHymns={allHymns} />
+          ) : (
+            <div style={S.fRow}>
+              <div style={S.fHalf}>
+                <label style={S.fieldLabel}>Title</label>
+                <input style={S.input} type="text" placeholder="Musical number title" value={agenda.intermediateItem?.title || ""} onChange={e => updateField("intermediateItem.title", e.target.value)} />
+              </div>
+              <div style={S.fHalf}>
+                <label style={S.fieldLabel}>Performer(s)</label>
+                <input style={S.input} type="text" placeholder="Performer(s)" value={agenda.intermediateItem?.performer || ""} onChange={e => updateField("intermediateItem.performer", e.target.value)} />
+              </div>
+            </div>
+          )}
+        </div>
+
         <HymnInput label="Closing Hymn" hymn={agenda.closingHymn} onChange={v => updateField("closingHymn", v)} allHymns={allHymns} />
 
         <div style={S.fieldGroup}><label style={S.fieldLabel}>Benediction</label><input style={S.input} type="text" placeholder="Name" value={agenda.benediction} onChange={e => updateField("benediction", e.target.value)} /></div>
-        <div style={S.fieldGroup}><label style={S.fieldLabel}>Announcements</label><textarea style={S.ta} rows={3} placeholder="Ward announcements..." value={agenda.announcements} onChange={e => updateField("announcements", e.target.value)} /></div>
       </div>
 
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
@@ -790,13 +1132,30 @@ const S = {
   printRow:{display:"flex",gap:6,alignItems:"baseline"},
   printLbl:{fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",color:C.mt,minWidth:72,fontFamily:fs},
   printVal:{fontSize:13,color:C.tx},printDiv:{height:1,background:C.bd,margin:"6px 0 16px"},
-  pItem:{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"7px 0",borderBottom:`1px solid ${C.bl}`,flexWrap:"wrap"},
-  pItemL:{fontSize:13,fontWeight:600,color:C.tx},pItemV:{fontSize:13,color:C.tx,textAlign:"right"},
+  pItem:{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"10px 12px",margin:"2px 0",background:"#fff",borderRadius:6,border:`1px solid ${C.bl}`,flexWrap:"wrap"},
+  pItemL:{fontSize:14,fontWeight:600,color:C.tx,minWidth:"140px"},pItemV:{fontSize:14,color:C.tx,textAlign:"right",fontWeight:500},
   pNote:{margin:"3px 0 0",fontSize:12,color:C.mt,fontStyle:"italic",width:"100%"},
+  pAnnouncements:{margin:"8px 0 0",width:"100%"},
+  pAnnouncementItem:{display:"flex",alignItems:"flex-start",margin:"4px 0",lineHeight:1.4},
+  pBullet:{color:C.ac,fontWeight:"bold",marginRight:8,fontSize:16,lineHeight:1},
+  pAnnouncementText:{fontSize:13,color:C.tx,flex:1},
+  pOpeningText:{padding:"12px 0",margin:"8px 0 16px",fontSize:14,color:C.tx,lineHeight:1.6,fontStyle:"italic",textAlign:"center",background:C.bl,borderRadius:8},
   pBizSec:{padding:"10px 0",margin:"6px 0",borderBottom:`1px solid ${C.bl}`},
   pSecT:{display:"block",fontSize:13,fontWeight:600,color:C.ac,marginBottom:6},
-  pBizGrp:{marginBottom:6},pBizLbl:{display:"block",fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",color:C.mt,marginBottom:1,fontFamily:fs},
-  pBizItem:{fontSize:13,color:C.tx,paddingLeft:10,lineHeight:1.5},
+  pBizGrp:{marginBottom:16,padding:16,background:"#fff",borderRadius:8,border:`2px solid ${C.ac}`,boxShadow:"0 2px 8px rgba(0,0,0,0.1)"},pBizLbl:{display:"block",fontSize:12,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:C.ac,marginBottom:8,fontFamily:fs,textAlign:"center",background:C.bl,padding:"4px 8px",borderRadius:4},
+  pBizItem:{fontSize:14,color:C.tx,padding:"4px 12px",margin:"2px 0",background:C.bl,borderRadius:4,lineHeight:1.5},
+  pNameItem:{fontSize:16,padding:"6px 12px",margin:"2px 0",background:C.bl,borderRadius:4,textAlign:"left"},
+  pNameText:{fontWeight:600,color:C.tx,fontSize:15},
+  pCallingText:{fontWeight:400,color:C.mt,fontSize:14,fontStyle:"italic"},
+  pBizSubSection:{marginBottom:20},
+  pSubSectionHeader:{fontSize:16,fontWeight:700,color:C.ac,marginBottom:8,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.1em"},
+  pNameItemClean:{fontSize:15,padding:"4px 0",margin:"2px 0",textAlign:"left"},
+  pNameTextBold:{fontWeight:700,color:C.tx,fontSize:15},
+  pCallingTextClean:{fontWeight:400,color:C.tx,fontSize:15},
+  pSection:{marginBottom:24,paddingBottom:16,borderBottom:`2px solid ${C.bd}`,pageBreakInside:"avoid"},
+  pSectionTitle:{fontSize:18,fontWeight:600,color:C.ac,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:"center",background:`linear-gradient(135deg, ${C.ac} 0%, #5a7ba0 100%)`,color:"#fff",padding:"8px 16px",borderRadius:8,fontFamily:fs},
+  pReadingText:{padding:"8px 12px",margin:"4px 0",fontSize:14,color:C.tx,lineHeight:1.6,fontStyle:"italic",background:C.bl,borderRadius:6},
+  pWaitText:{padding:"4px 12px",margin:"2px 0",fontSize:12,color:C.mt,fontWeight:600,fontStyle:"normal",textAlign:"center",background:"#f8f8f8",borderRadius:4},
 };
 
 const M = {
