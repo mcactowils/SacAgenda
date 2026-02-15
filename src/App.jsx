@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef, memo } from "react";
-import storage from "./storage";
+import React, { useState, useEffect, useCallback, useRef, memo } from "react";
 import DEFAULT_HYMNS from "./hymns";
+import DEFAULT_NAMES from "./names";
+import api, { connectWebSocket, addWebSocketListener } from "./api";
 
 // ── CONSTANTS ──
 const WARD_NAME = "Parrish Canyon";
@@ -17,165 +18,237 @@ const EMPTY_AGENDA = {
   openingHymn: { number: "", title: "" },
   invocation: "",
   wardBusiness: {
-    callings: [{ name: "", calling: "" }],
     releases: [{ name: "", calling: "" }],
+    sustainings: [{ name: "", calling: "" }],
+    baptismsConfirmations: [{ name: "", type: "" }],
+    newMembers: [{ name: "", from: "" }],
     ordinations: [{ name: "", office: "" }],
-    babyBlessings: [{ name: "" }],
-    confirmations: [{ name: "" }],
-    newMembers: [{ name: "" }],
-    other: "",
+    other: ""
   },
   sacramentHymn: { number: "", title: "" },
-  speakers: [{ name: "" }],
-  youthSpeakers: [{ name: "" }],
-  musicalNumbers: [{ performer: "", title: "" }],
-  intermediateItem: { type: "hymn", number: "", title: "", performer: "", placement: "after-youth" }, // type: "hymn" or "musical", placement: after-youth, after-speaker-1, etc.
-  closingHymn: { number: "", title: "" },
   isFastSunday: false,
+  speakers: [{ name: "", topic: "", intermediateMusic: null }],
+  youthSpeakers: [{ name: "", topic: "", intermediateMusic: null }],
+  musicalNumbers: [{ performers: "", title: "" }],
+  isPrimaryProgram: false,
+  primaryTheme: "",
+  primaryPresiding: "",
+  primaryConducting: "",
+  primaryOpeningHymn: { number: "", title: "" },
+  primaryClosingHymn: { number: "", title: "" },
   isEaster: false,
   isChristmas: false,
-  benediction: "",
-  announcements: "",
-  isPrimaryProgram: false,
-  primaryProgramNotes: "",
+  christmasTheme: "The Light of the World",
+  closingHymn: { number: "", title: "" },
+  benediction: ""
 };
 
 const DEFAULT_SMART_TEXT = {
-  openingText: "We will open our meeting by singing Hymn {hymnNumber}{hymnTitle}, after which {invocationName} will offer the invocation.",
+  openingText: "",
   reverenceText: "Thank you for your reverence during the sacrament ordinance.",
-  fastSundayNote: "Note: The conducting counselor will share their testimony, after which the floor will be opened for others to bear their testimonies.",
-  fastSundayInstructions: "The remainder of the time is for the bearing of testimonies. We invite you to come forward and share your testimony, or stand and an Aaronic Priesthood holder will bring a microphone to you. We will plan to conclude at 5 minutes before the hour.",
-  releasesText: "A release has been extended to the following individual{plural}:",
-  releasesThanks: "Those who wish to express thanks for their service may show it by the uplifted hand.",
-  sustainingsText: "The following individual{plural} {hasHave} been called to serve and we present {themThem} for your sustaining vote:",
-  sustainingsVote: "Those in favor may manifest it by raising the right hand. Those opposed, if any, may manifest it.",
-  ordinationsText: "The following will be ordained to the {office} in the Aaronic Priesthood:",
-  appreciationText: "We appreciate those who have participated today. Thanks to our Chorister {choristerName} and our Organist {organistName} for the music. We will close by singing Hymn {closingHymnNumber}{closingHymnTitle}, after which {benedictionName} will offer the benediction."
+  appreciationText: "We appreciate those who have participated today. Thanks to our Chorister ${agenda.chorister} and our Organist ${agenda.organist} for the music. We will close by singing hymn #${agenda.closingHymn.number} \"${agenda.closingHymn.title}\" after which ${agenda.benediction} will offer the benediction."
 };
 
 const USER_ROLES = {
-  ADMIN: 'administrator',
-  EDITOR: 'editor',
-  VIEWER: 'viewer'
+  ADMIN: 'ADMIN',
+  EDITOR: 'EDITOR',
+  VIEWER: 'VIEWER'
 };
 
 const BIZ_SECTIONS = {
   releases: { itemLabel: "Release", fields: ["name", "calling"], labels: ["Name", "Calling"] },
-  callings: { itemLabel: "Sustaining", fields: ["name", "calling"], labels: ["Name", "Calling"] },
-  ordinations: { itemLabel: "Ordination", fields: ["name", "office"], labels: ["Name", "Office"] },
-  babyBlessings: { itemLabel: "Baby Blessing", fields: ["name"], labels: ["Name"] },
-  confirmations: { itemLabel: "Confirmation", fields: ["name"], labels: ["Name"] },
-  newMembers: { itemLabel: "New Member", fields: ["name"], labels: ["Name"] },
+  sustainings: { itemLabel: "Sustaining", fields: ["name", "calling"], labels: ["Name", "Calling"] },
+  baptismsConfirmations: { itemLabel: "Baptism/Confirmation", fields: ["name", "type"], labels: ["Name", "Type (Baptism/Confirmation)"] },
+  newMembers: { itemLabel: "New Member", fields: ["name", "from"], labels: ["Name", "Moving from"] },
+  ordinations: { itemLabel: "Ordination", fields: ["name", "office"], labels: ["Name", "Office"] }
 };
 
+// ── UTILITIES ──
 function getNextSunday() {
-  const d = new Date();
-  d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7));
-  // If today is Sunday, use today
-  if (new Date().getDay() === 0) d.setDate(new Date().getDate());
-  return d.toISOString().split("T")[0];
+  const today = new Date();
+  const day = today.getDay();
+  const daysUntilSunday = day === 0 ? 7 : 7 - day;
+  const nextSunday = new Date(today);
+  nextSunday.setDate(today.getDate() + daysUntilSunday);
+  return nextSunday.toISOString().split('T')[0];
 }
 
-function formatDate(s) {
-  if (!s) return "";
-  return new Date(s + "T12:00:00").toLocaleDateString("en-US", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
-  });
-}
-
-// ── COLLAPSIBLE SECTION ──
-const Section = memo(function Section({ label, isOpen, onToggle, children }) {
+// ── HYMN INPUT COMPONENT ──
+const HymnInput = memo(({ label, hymn, onChange, allHymns }) => {
   return (
-    <div style={S.secBlock}>
-      <button style={S.secToggle} onClick={onToggle} type="button">
-        <span style={S.secArrow}>{isOpen ? "▾" : "▸"}</span>
-        <span style={S.secLabel}>{label}</span>
-      </button>
-      {isOpen && <div style={S.secContent}>{children}</div>}
-    </div>
-  );
-});
-
-// ── HYMN INPUT ──
-const HymnInput = memo(function HymnInput({ label, hymn, onChange, allHymns }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const [showSug, setShowSug] = useState(false);
-  const ref = useRef(null);
-
-  const onNum = (val) => {
-    const num = parseInt(val);
-    if (allHymns[num]) {
-      onChange({ number: val, title: allHymns[num] });
-      setSuggestions([]); setShowSug(false);
-    } else {
-      onChange({ number: val, title: val ? (hymn?.title || "") : "" });
-    }
-  };
-
-  const onTitle = (val) => {
-    onChange({ number: hymn?.number || "", title: val });
-    if (val.length >= 2) {
-      const l = val.toLowerCase();
-      const m = Object.entries(allHymns).filter(([_, t]) => t.toLowerCase().includes(l)).slice(0, 8);
-      setSuggestions(m); setShowSug(m.length > 0);
-    } else { setSuggestions([]); setShowSug(false); }
-  };
-
-  const pick = (n, t) => { onChange({ number: String(n), title: t }); setSuggestions([]); setShowSug(false); };
-
-  useEffect(() => {
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setShowSug(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
-
-  return (
-    <div style={S.hymnRow} ref={ref}>
+    <div style={S.fieldGroup}>
       <label style={S.fieldLabel}>{label}</label>
-      <div style={S.hymnInputs}>
-        <input style={S.hymnNum} type="text" placeholder="#" value={hymn?.number || ""} onChange={e => onNum(e.target.value)} />
-        <div style={{ flex: 1, position: "relative" }}>
-          <input style={S.hymnTitle} type="text" placeholder="Hymn title (type to search)" value={hymn?.title || ""}
-            onChange={e => onTitle(e.target.value)} onFocus={() => { if (suggestions.length) setShowSug(true); }} />
-          {showSug && (
-            <div style={S.sugBox}>
-              {suggestions.map(([n, t]) => (
-                <button key={n} style={S.sugItem} type="button" onMouseDown={e => { e.preventDefault(); pick(n, t); }}>
-                  <span style={S.sugNum}>#{n}</span> {t}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+      <div style={S.hymnRow}>
+        <input style={S.hymnNum} type="text" placeholder="#" value={hymn.number}
+          onChange={e => onChange({ ...hymn, number: e.target.value, title: allHymns[e.target.value] || hymn.title })} />
+        <input style={S.hymnTitle} type="text" placeholder="Hymn title" value={hymn.title}
+          onChange={e => onChange({ ...hymn, title: e.target.value })} />
       </div>
     </div>
   );
 });
 
-// ── NAME DROPDOWN ──
-const NameDropdown = memo(function NameDropdown({ label, value, options, onChange }) {
-  const [isCustom, setIsCustom] = useState(false);
+// ── NAME DROPDOWN COMPONENT ──
+const NameDropdown = memo(({ label, value, options, onChange }) => (
+  <div>
+    <label style={S.fieldLabel}>{label}</label>
+    <select style={S.input} value={value} onChange={e => onChange(e.target.value)}>
+      <option value="">— Select {label} —</option>
+      {options.map(name => (
+        <option key={name} value={name}>{name}</option>
+      ))}
+    </select>
+  </div>
+));
 
-  if (options.length === 0) {
-    return (<div><label style={S.fieldLabel}>{label}</label>
-      <input style={S.input} type="text" placeholder="Name" value={value || ""} onChange={e => onChange(e.target.value)} /></div>);
-  }
-  if (isCustom || (value && !options.includes(value))) {
-    return (<div><label style={S.fieldLabel}>{label}</label>
-      <div style={{ display: "flex", gap: 6 }}>
-        <input style={{ ...S.input, flex: 1 }} type="text" placeholder="Type a name" value={value || ""} onChange={e => onChange(e.target.value)} />
-        <button style={S.switchBtn} type="button" onClick={() => { setIsCustom(false); onChange(""); }}>▾</button>
-      </div></div>);
-  }
-  return (<div><label style={S.fieldLabel}>{label}</label>
-    <select style={S.select} value={value || ""} onChange={e => { const v = e.target.value; if (v === "__custom__") { setIsCustom(true); onChange(""); } else { setIsCustom(false); onChange(v); } }}>
-      <option value="">— Select —</option>
-      {options.map((n, i) => <option key={i} value={n}>{n}</option>)}
-      <option value="__custom__">Other (type a name)...</option>
-    </select></div>);
-});
+// ── SECTION COMPONENT ──
+const Section = memo(({ label, isOpen, onToggle, children }) => (
+  <div style={S.section}>
+    <div style={S.sectionHeader} onClick={onToggle}>
+      <span style={S.sectionTitle}>{label}</span>
+      <span style={S.sectionToggle}>{isOpen ? "−" : "+"}</span>
+    </div>
+    {isOpen && <div style={S.sectionBody}>{children}</div>}
+  </div>
+));
 
-// ── SETTINGS MODAL (names + hymns) ──
+// ── AUTHENTICATION COMPONENTS ──
+function LoginForm({ onLogin, onSwitchToRegister }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!username.trim() || !password.trim()) {
+      setError("Please fill in all fields");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const result = await api.login(username.trim(), password);
+      onLogin(result.user);
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={A.container}>
+      <div style={A.form}>
+        <h2 style={A.title}>Login to Sacrament Agenda</h2>
+        {error && <div style={A.error}>{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <input style={A.input} type="text" placeholder="Username" value={username}
+            onChange={e => setUsername(e.target.value)} disabled={loading} />
+          <input style={A.input} type="password" placeholder="Password" value={password}
+            onChange={e => setPassword(e.target.value)} disabled={loading} />
+          <button style={A.button} type="submit" disabled={loading}>
+            {loading ? "Logging in..." : "Login"}
+          </button>
+        </form>
+        <p style={A.switchText}>
+          Don't have an account? <button style={A.switchLink} onClick={onSwitchToRegister}>Register here</button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RegisterForm({ onRegister, onSwitchToLogin }) {
+  const [formData, setFormData] = useState({
+    username: "", email: "", password: "", fullName: ""
+  });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const { username, email, password, fullName } = formData;
+
+    if (!username.trim() || !email.trim() || !password.trim() || !fullName.trim()) {
+      setError("Please fill in all fields");
+      return;
+    }
+
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const result = await api.register({
+        username: username.trim(),
+        email: email.trim(),
+        password,
+        fullName: fullName.trim()
+      });
+
+      if (result.isFirstUser) {
+        onRegister(result.user);
+      } else {
+        onRegister({ requiresApproval: true });
+      }
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={A.container}>
+      <div style={A.form}>
+        <h2 style={A.title}>Register for Sacrament Agenda</h2>
+        {error && <div style={A.error}>{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <input style={A.input} type="text" placeholder="Full Name" value={formData.fullName}
+            onChange={e => setFormData(p => ({ ...p, fullName: e.target.value }))} disabled={loading} />
+          <input style={A.input} type="text" placeholder="Username" value={formData.username}
+            onChange={e => setFormData(p => ({ ...p, username: e.target.value }))} disabled={loading} />
+          <input style={A.input} type="email" placeholder="Email" value={formData.email}
+            onChange={e => setFormData(p => ({ ...p, email: e.target.value }))} disabled={loading} />
+          <input style={A.input} type="password" placeholder="Password (min 6 characters)" value={formData.password}
+            onChange={e => setFormData(p => ({ ...p, password: e.target.value }))} disabled={loading} />
+          <button style={A.button} type="submit" disabled={loading}>
+            {loading ? "Creating Account..." : "Create Account"}
+          </button>
+        </form>
+        <p style={A.switchText}>
+          Already have an account? <button style={A.switchLink} onClick={onSwitchToLogin}>Login here</button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PendingApproval() {
+  return (
+    <div style={A.container}>
+      <div style={A.form}>
+        <h2 style={A.title}>Account Pending Approval</h2>
+        <p style={A.message}>
+          Your account has been created and is waiting for approval from an administrator.
+          You will be able to access the application once your account is approved.
+        </p>
+        <p style={A.message}>
+          Please check back later or contact your ward administrator.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── SETTINGS MODAL ──
 function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, onSaveHymns, smartText, onSaveSmartText }) {
   const [groups, setGroups] = useState(nameGroups);
   const [newName, setNewName] = useState({ presiding: "", conducting: "", chorister: "", organist: "" });
@@ -183,7 +256,8 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
   const [newHymn, setNewHymn] = useState({ number: "", title: "" });
   const [csvFile, setCsvFile] = useState(null);
   const [textSettings, setTextSettings] = useState(smartText || DEFAULT_SMART_TEXT);
-  const [tab, setTab] = useState("names"); // names | hymns | text
+  const [tab, setTab] = useState("names");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setGroups(nameGroups);
@@ -194,24 +268,71 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
 
   if (!isOpen) return null;
 
-  const addName = (group) => {
+  const addName = async (group) => {
     const v = newName[group]?.trim();
     if (!v) return;
-    setGroups(p => ({ ...p, [group]: [...(p[group] || []), v] }));
-    setNewName(p => ({ ...p, [group]: "" }));
+
+    setLoading(true);
+    try {
+      const updatedGroups = await api.addName(group, v);
+      setGroups(updatedGroups);
+      onSaveNames(updatedGroups);
+      setNewName(p => ({ ...p, [group]: "" }));
+    } catch (error) {
+      console.error('Failed to add name:', error);
+      alert('Failed to add name: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
-  const removeName = (group, idx) => {
-    setGroups(p => ({ ...p, [group]: p[group].filter((_, i) => i !== idx) }));
+
+  const removeName = async (group, idx) => {
+    const nameToRemove = groups[group][idx];
+
+    setLoading(true);
+    try {
+      const updatedGroups = await api.removeName(group, nameToRemove);
+      setGroups(updatedGroups);
+      onSaveNames(updatedGroups);
+    } catch (error) {
+      console.error('Failed to remove name:', error);
+      alert('Failed to remove name: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
-  const addHymn = () => {
+
+  const addHymn = async () => {
     const num = newHymn.number.trim();
     const title = newHymn.title.trim();
     if (!num || !title) return;
-    setHymns(p => ({ ...p, [num]: title }));
-    setNewHymn({ number: "", title: "" });
+
+    setLoading(true);
+    try {
+      const updatedHymns = await api.addCustomHymn(num, title);
+      setHymns(updatedHymns);
+      onSaveHymns(updatedHymns);
+      setNewHymn({ number: "", title: "" });
+    } catch (error) {
+      console.error('Failed to add hymn:', error);
+      alert('Failed to add hymn: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
-  const removeHymn = (num) => {
-    setHymns(p => { const n = { ...p }; delete n[num]; return n; });
+
+  const removeHymn = async (num) => {
+    setLoading(true);
+    try {
+      const updatedHymns = await api.removeCustomHymn(num);
+      setHymns(updatedHymns);
+      onSaveHymns(updatedHymns);
+    } catch (error) {
+      console.error('Failed to remove hymn:', error);
+      alert('Failed to remove hymn: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const parseCsvLine = (line) => {
@@ -224,15 +345,12 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
 
       if (char === '"') {
         if (inQuotes && line[i + 1] === '"') {
-          // Handle escaped quotes ""
           current += '"';
-          i++; // Skip next quote
+          i++;
         } else {
-          // Toggle quote state
           inQuotes = !inQuotes;
         }
       } else if (char === ',' && !inQuotes) {
-        // End of field
         result.push(current.trim());
         current = '';
       } else {
@@ -240,7 +358,6 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
       }
     }
 
-    // Add the last field
     result.push(current.trim());
     return result;
   };
@@ -250,7 +367,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const text = event.target.result;
       const lines = text.split('\n').map(line => line.trim()).filter(line => line);
       const newHymns = {};
@@ -267,27 +384,48 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
       });
 
       if (Object.keys(newHymns).length > 0) {
-        setHymns(p => ({ ...p, ...newHymns }));
-        setCsvFile(null);
-        e.target.value = '';
+        setLoading(true);
+        try {
+          for (const [number, title] of Object.entries(newHymns)) {
+            await api.addCustomHymn(number, title);
+          }
+          const updatedHymns = await api.getCustomHymns();
+          setHymns(updatedHymns);
+          onSaveHymns(updatedHymns);
+          setCsvFile(null);
+          e.target.value = '';
+        } catch (error) {
+          console.error('Failed to upload hymns:', error);
+          alert('Failed to upload hymns: ' + error.message);
+        } finally {
+          setLoading(false);
+        }
       }
     };
     reader.readAsText(file);
   };
-  const handleSave = () => {
-    onSaveNames(groups);
-    onSaveHymns(hymns);
-    if (onSaveSmartText) {
-      onSaveSmartText(textSettings);
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      if (onSaveSmartText) {
+        await api.updateSmartText(textSettings);
+        onSaveSmartText(textSettings);
+      }
+      onClose();
+    } catch (error) {
+      console.error('Failed to save smart text:', error);
+      alert('Failed to save smart text: ' + error.message);
+    } finally {
+      setLoading(false);
     }
-    onClose();
   };
 
   const nameCfgs = {
-    presiding: { label: "Presiding", hint: "Bishopric members, stake leaders, visiting authorities" },
-    conducting: { label: "Conducting", hint: "Bishopric members, stake leaders, visiting authorities" },
-    chorister: { label: "Choristers", hint: "Ward chorister(s)" },
-    organist: { label: "Organists", hint: "Ward organist(s) / pianist(s)" },
+    presiding: { label: "Presiding", hint: "Bishopric members, stake leaders, visiting authorities (shared across all users)" },
+    conducting: { label: "Conducting", hint: "Bishopric members, stake leaders, visiting authorities (shared across all users)" },
+    chorister: { label: "Choristers", hint: "Ward chorister(s) (shared across all users)" },
+    organist: { label: "Organists", hint: "Ward organist(s) / pianist(s) (shared across all users)" },
   };
 
   return (
@@ -298,7 +436,6 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
           <button style={M.closeBtn} type="button" onClick={onClose}>✕</button>
         </div>
 
-        {/* Tabs */}
         <div style={M.tabs}>
           <button style={tab === "names" ? M.tabActive : M.tab} type="button" onClick={() => setTab("names")}>Name Lists</button>
           <button style={tab === "hymns" ? M.tabActive : M.tab} type="button" onClick={() => setTab("hymns")}>Custom Hymns</button>
@@ -314,38 +451,45 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
                 {(groups[key] || []).map((name, idx) => (
                   <div key={idx} style={M.nameTag}>
                     <span>{name}</span>
-                    <button style={M.nameRemove} type="button" onClick={() => removeName(key, idx)}>✕</button>
+                    <button style={M.nameRemove} type="button" onClick={() => removeName(key, idx)} disabled={loading}>✕</button>
                   </div>
                 ))}
               </div>
               <div style={M.addRow}>
                 <input style={M.addInput} type="text" placeholder="Add name..."
                   value={newName[key] || ""} onChange={e => setNewName(p => ({ ...p, [key]: e.target.value }))}
-                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addName(key); } }} />
-                <button style={M.addBtnS} type="button" onClick={() => addName(key)}>Add</button>
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addName(key); } }}
+                  disabled={loading} />
+                <button style={M.addBtnS} type="button" onClick={() => addName(key)} disabled={loading}>
+                  {loading ? "..." : "Add"}
+                </button>
               </div>
             </div>
           ))}
 
           {tab === "hymns" && (
             <div>
-              <p style={M.groupHint}>Add new hymns from "Hymns—For Home and Church" or other sources as they're released. These supplement the built-in 1985 hymnal.</p>
+              <p style={M.groupHint}>Add new hymns from "Hymns—For Home and Church" or other sources as they're released. These supplement the built-in 1985 hymnal and are shared across all users.</p>
 
               <div style={M.csvSection}>
                 <div style={M.csvLabel}>Upload CSV File</div>
                 <p style={{ ...M.groupHint, marginBottom: 8 }}>Upload a CSV file with hymn numbers and titles (format: number,title)</p>
-                <input type="file" accept=".csv" onChange={handleCsvUpload} style={M.csvInput} />
+                <input type="file" accept=".csv" onChange={handleCsvUpload} style={M.csvInput} disabled={loading} />
               </div>
 
               <div style={M.divider}>OR</div>
 
               <div style={{ ...M.addRow, marginBottom: 12 }}>
                 <input style={{ ...M.addInput, width: 70, flex: "none" }} type="text" placeholder="#"
-                  value={newHymn.number} onChange={e => setNewHymn(p => ({ ...p, number: e.target.value }))} />
+                  value={newHymn.number} onChange={e => setNewHymn(p => ({ ...p, number: e.target.value }))}
+                  disabled={loading} />
                 <input style={M.addInput} type="text" placeholder="Hymn title"
                   value={newHymn.title} onChange={e => setNewHymn(p => ({ ...p, title: e.target.value }))}
-                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addHymn(); } }} />
-                <button style={M.addBtnS} type="button" onClick={addHymn}>Add</button>
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addHymn(); } }}
+                  disabled={loading} />
+                <button style={M.addBtnS} type="button" onClick={addHymn} disabled={loading}>
+                  {loading ? "..." : "Add"}
+                </button>
               </div>
               {Object.keys(hymns).length === 0 ? (
                 <p style={{ ...M.groupHint, textAlign: "center", padding: 16 }}>No custom hymns added yet.</p>
@@ -355,13 +499,14 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
                     <div key={num} style={M.hymnItem}>
                       <span style={M.hymnNum}>#{num}</span>
                       <span style={M.hymnTitle}>{title}</span>
-                      <button style={M.nameRemove} type="button" onClick={() => removeHymn(num)}>✕</button>
+                      <button style={M.nameRemove} type="button" onClick={() => removeHymn(num)} disabled={loading}>✕</button>
                     </div>
                   ))}
                 </div>
               )}
             </div>
           )}
+
           {tab === "text" && (
             <div>
               <p style={M.groupHint}>Customize the text that appears in the printed agenda.</p>
@@ -371,6 +516,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
                   style={{ ...M.input, height: "60px", fontFamily: "monospace", fontSize: "12px" }}
                   value={textSettings?.openingText || DEFAULT_SMART_TEXT.openingText}
                   onChange={e => setTextSettings(prev => ({ ...prev, openingText: e.target.value }))}
+                  disabled={loading}
                 />
               </div>
               <div style={M.group}>
@@ -379,6 +525,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
                   style={{ ...M.input, height: "40px", fontFamily: "monospace", fontSize: "12px" }}
                   value={textSettings?.reverenceText || DEFAULT_SMART_TEXT.reverenceText}
                   onChange={e => setTextSettings(prev => ({ ...prev, reverenceText: e.target.value }))}
+                  disabled={loading}
                 />
               </div>
               <div style={M.group}>
@@ -387,6 +534,7 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
                   style={{ ...M.input, height: "80px", fontFamily: "monospace", fontSize: "12px" }}
                   value={textSettings?.appreciationText || DEFAULT_SMART_TEXT.appreciationText}
                   onChange={e => setTextSettings(prev => ({ ...prev, appreciationText: e.target.value }))}
+                  disabled={loading}
                 />
               </div>
             </div>
@@ -394,8 +542,10 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
         </div>
 
         <div style={M.footer}>
-          <button style={M.cancelBtn} type="button" onClick={onClose}>Cancel</button>
-          <button style={M.saveBtn} type="button" onClick={handleSave}>Save</button>
+          <button style={M.cancelBtn} type="button" onClick={onClose} disabled={loading}>Cancel</button>
+          <button style={M.saveBtn} type="button" onClick={handleSave} disabled={loading}>
+            {loading ? "Saving..." : "Save"}
+          </button>
         </div>
       </div>
     </div>
@@ -404,218 +554,127 @@ function SettingsModal({ isOpen, onClose, nameGroups, onSaveNames, customHymns, 
 
 // ── USER MANAGEMENT MODAL ──
 function UserManagementModal({ isOpen, onClose, users, currentUser, onApproveUser, onUpdateUserRole, onRemoveUser }) {
+  const [loading, setLoading] = useState(false);
+
   if (!isOpen) return null;
 
-  const pendingUsers = users.filter(u => !u.approved);
+  const handleApprove = async (userId) => {
+    setLoading(true);
+    try {
+      await onApproveUser(userId);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRoleChange = async (userId, role) => {
+    setLoading(true);
+    try {
+      await onUpdateUserRole(userId, role);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemove = async (userId) => {
+    if (confirm('Are you sure you want to remove this user?')) {
+      setLoading(true);
+      try {
+        await onRemoveUser(userId);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
   const activeUsers = users.filter(u => u.approved);
+  const pendingUsers = users.filter(u => !u.approved);
 
   return (
-    <div style={S.modalOverlay}>
-      <div style={S.modalContent}>
-        <div style={S.modalHeader}>
-          <h3 style={S.modalTitle}>User Management</h3>
-          <button style={S.modalCloseBtn} type="button" onClick={onClose}>×</button>
+    <div style={M.overlay} onClick={onClose}>
+      <div style={M.box} onClick={e => e.stopPropagation()}>
+        <div style={M.header}>
+          <h3 style={M.title}>User Management</h3>
+          <button style={M.closeBtn} type="button" onClick={onClose}>✕</button>
         </div>
 
-        <div style={S.modalBody}>
+        <div style={M.body}>
+          <div style={M.userSection}>
+            <h4 style={M.userSectionTitle}>Active Users ({activeUsers.length})</h4>
+            {activeUsers.length === 0 ? (
+              <p style={M.emptyState}>No active users</p>
+            ) : (
+              <div style={M.userList}>
+                {activeUsers.map(user => (
+                  <div key={user.id} style={M.userItem}>
+                    <div style={M.userInfo}>
+                      <div style={M.userName}>{user.full_name}</div>
+                      <div style={M.userDetails}>@{user.username} • {user.email}</div>
+                    </div>
+                    <div style={M.userActions}>
+                      <select
+                        style={M.roleSelect}
+                        value={user.role}
+                        onChange={e => handleRoleChange(user.id, e.target.value)}
+                        disabled={loading || user.id === currentUser.id}
+                      >
+                        <option value="ADMIN">Admin</option>
+                        <option value="EDITOR">Editor</option>
+                        <option value="VIEWER">Viewer</option>
+                      </select>
+                      {user.id !== currentUser.id && (
+                        <button
+                          style={M.removeBtn}
+                          onClick={() => handleRemove(user.id)}
+                          disabled={loading}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {pendingUsers.length > 0 && (
-            <div style={S.userSection}>
-              <h4 style={S.sectionTitle}>Pending Approval ({pendingUsers.length})</h4>
-              {pendingUsers.map(user => (
-                <div key={user.id} style={S.userItem}>
-                  <div style={S.userInfo}>
-                    <strong>{user.username}</strong>
-                    <span style={S.userEmail}>{user.email}</span>
-                    <span style={S.userDate}>Registered: {new Date(user.createdAt).toLocaleDateString()}</span>
+            <div style={M.userSection}>
+              <h4 style={M.userSectionTitle}>Pending Approval ({pendingUsers.length})</h4>
+              <div style={M.userList}>
+                {pendingUsers.map(user => (
+                  <div key={user.id} style={M.userItem}>
+                    <div style={M.userInfo}>
+                      <div style={M.userName}>{user.full_name}</div>
+                      <div style={M.userDetails}>@{user.username} • {user.email}</div>
+                    </div>
+                    <div style={M.userActions}>
+                      <button
+                        style={M.approveBtn}
+                        onClick={() => handleApprove(user.id)}
+                        disabled={loading}
+                      >
+                        {loading ? "..." : "Approve"}
+                      </button>
+                      <button
+                        style={M.removeBtn}
+                        onClick={() => handleRemove(user.id)}
+                        disabled={loading}
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                  <div style={S.userActions}>
-                    <button
-                      style={S.approveBtn}
-                      type="button"
-                      onClick={() => onApproveUser(user.id)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      style={S.rejectBtn}
-                      type="button"
-                      onClick={() => onRemoveUser(user.id)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
+        </div>
 
-          <div style={S.userSection}>
-            <h4 style={S.sectionTitle}>Active Users ({activeUsers.length})</h4>
-            {activeUsers.map(user => (
-              <div key={user.id} style={S.userItem}>
-                <div style={S.userInfo}>
-                  <strong>{user.username}</strong>
-                  <span style={S.userEmail}>{user.email}</span>
-                  <span style={S.userRole}>Role: {user.role}</span>
-                </div>
-                {currentUser.id !== user.id && (
-                  <div style={S.userActions}>
-                    <select
-                      style={S.roleSelect}
-                      value={user.role}
-                      onChange={(e) => onUpdateUserRole(user.id, e.target.value)}
-                    >
-                      <option value={USER_ROLES.VIEWER}>Viewer</option>
-                      <option value={USER_ROLES.EDITOR}>Editor</option>
-                      <option value={USER_ROLES.ADMIN}>Administrator</option>
-                    </select>
-                    <button
-                      style={S.removeBtn}
-                      type="button"
-                      onClick={() => {
-                        if (confirm(`Remove user "${user.username}"?`)) {
-                          onRemoveUser(user.id);
-                        }
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+        <div style={M.footer}>
+          <button style={M.cancelBtn} type="button" onClick={onClose}>Close</button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── AUTHENTICATION COMPONENTS ──
-function LoginForm({ onLogin, onSwitchToRegister }) {
-  const [username, setUsername] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!username.trim()) return;
-
-    setLoading(true);
-    setError("");
-    const result = await onLogin(username.trim());
-    setLoading(false);
-
-    if (!result.success) {
-      setError(result.error);
-    }
-  };
-
-  return (
-    <div style={S.authForm}>
-      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
-      <h2 style={S.authSubtitle}>Sign In</h2>
-      <form onSubmit={handleSubmit}>
-        <div style={S.authField}>
-          <label style={S.fieldLabel}>Username</label>
-          <input
-            style={S.input}
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Enter your username"
-          />
-        </div>
-        {error && <p style={S.authError}>{error}</p>}
-        <button style={S.authBtn} type="submit" disabled={loading}>
-          {loading ? "Signing In..." : "Sign In"}
-        </button>
-      </form>
-      <p style={S.authLink}>
-        Don't have an account?{" "}
-        <button style={S.authLinkBtn} type="button" onClick={onSwitchToRegister}>
-          Register here
-        </button>
-      </p>
-    </div>
-  );
-}
-
-function RegisterForm({ onRegister, onSwitchToLogin, onPendingApproval }) {
-  const [formData, setFormData] = useState({ username: "", email: "" });
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.username.trim() || !formData.email.trim()) return;
-
-    setLoading(true);
-    setError("");
-    const result = await onRegister(formData);
-    setLoading(false);
-
-    if (result.success) {
-      if (result.needsApproval) {
-        onPendingApproval();
-      }
-    } else {
-      setError(result.error || "Registration failed");
-    }
-  };
-
-  return (
-    <div style={S.authForm}>
-      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
-      <h2 style={S.authSubtitle}>Register</h2>
-      <form onSubmit={handleSubmit}>
-        <div style={S.authField}>
-          <label style={S.fieldLabel}>Username</label>
-          <input
-            style={S.input}
-            type="text"
-            value={formData.username}
-            onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
-            placeholder="Choose a username"
-          />
-        </div>
-        <div style={S.authField}>
-          <label style={S.fieldLabel}>Email</label>
-          <input
-            style={S.input}
-            type="email"
-            value={formData.email}
-            onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-            placeholder="Enter your email"
-          />
-        </div>
-        {error && <p style={S.authError}>{error}</p>}
-        <button style={S.authBtn} type="submit" disabled={loading}>
-          {loading ? "Registering..." : "Register"}
-        </button>
-      </form>
-      <p style={S.authLink}>
-        Already have an account?{" "}
-        <button style={S.authLinkBtn} type="button" onClick={onSwitchToLogin}>
-          Sign in here
-        </button>
-      </p>
-    </div>
-  );
-}
-
-function PendingApproval({ onBackToLogin }) {
-  return (
-    <div style={S.authForm}>
-      <h1 style={S.authTitle}>Sacrament Meeting Agenda</h1>
-      <h2 style={S.authSubtitle}>Account Pending Approval</h2>
-      <p style={S.authMessage}>
-        Your account has been created and is pending approval by an administrator.
-        You'll be able to access the application once your account is approved.
-      </p>
-      <button style={S.authBtn} type="button" onClick={onBackToLogin}>
-        Back to Sign In
-      </button>
     </div>
   );
 }
@@ -623,16 +682,18 @@ function PendingApproval({ onBackToLogin }) {
 // ── MAIN APP ──
 export default function App() {
   const [agenda, setAgenda] = useState(null);
-  const [nameGroups, setNameGroups] = useState({ presiding: [], conducting: [], chorister: [], organist: [] });
+  const [nameGroups, setNameGroups] = useState(DEFAULT_NAMES);
   const [customHymns, setCustomHymns] = useState({});
   const [allHymns, setAllHymns] = useState(DEFAULT_HYMNS);
   const [savedAgendas, setSavedAgendas] = useState([]);
   const [view, setView] = useState("edit");
   const [loading, setLoading] = useState(true);
-  const [saveStatus, setSaveStatus] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+  const printRef = useRef(null);
   const [expanded, setExpanded] = useState({
-    wardBusiness: true, speakers: true, youthSpeakers: false,
+    wardBusiness: false, speakers: false, youthSpeakers: false,
     musicalNumbers: false, primary: false,
   });
 
@@ -640,48 +701,103 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [smartText, setSmartText] = useState(DEFAULT_SMART_TEXT);
-  const [authView, setAuthView] = useState("login"); // login, register, pending
-  const [showUserManagement, setShowUserManagement] = useState(false);
-
-  const agendaRef = useRef(null);
-  agendaRef.current = agenda;
+  const [authView, setAuthView] = useState("login");
 
   // Merge default + custom hymns whenever custom changes
   useEffect(() => {
     setAllHymns({ ...DEFAULT_HYMNS, ...customHymns });
   }, [customHymns]);
 
+  // Initialize app data and check for existing auth
   useEffect(() => {
     async function init() {
       try {
-        let names = { presiding: [], conducting: [], chorister: [], organist: [] };
-        try { const r = await storage.get("agenda-name-groups"); if (r?.value) names = JSON.parse(r.value); } catch {}
-        // Migrate old "leadership" key to separate presiding/conducting
-        if (names.leadership && !names.presiding) { names.presiding = [...names.leadership]; names.conducting = [...names.leadership]; delete names.leadership; }
-        // Migrate old "music" key if present
-        if (names.music && !names.chorister) { names.chorister = names.music; names.organist = [...names.music]; delete names.music; }
-        if (!names.presiding) names.presiding = [];
-        if (!names.conducting) names.conducting = [];
-        if (!names.chorister) names.chorister = [];
-        if (!names.organist) names.organist = [];
-        setNameGroups(names);
+        // Try to get current user (will work if we have a valid token)
+        try {
+          const userResult = await api.getCurrentUser();
+          setCurrentUser(userResult.user);
+        } catch (error) {
+          // No valid session, user needs to login
+          console.log('No valid session found');
+        }
 
-        let ch = {};
-        try { const r = await storage.get("agenda-custom-hymns"); if (r?.value) ch = JSON.parse(r.value); } catch {}
-        setCustomHymns(ch);
+        // Load shared data
+        try {
+          const [nameGroupsResult, customHymnsResult, smartTextResult, agendasResult] = await Promise.all([
+            api.getNameGroups().catch(() => DEFAULT_NAMES),
+            api.getCustomHymns().catch(() => ({})),
+            api.getSmartText().catch(() => DEFAULT_SMART_TEXT),
+            api.getSavedAgendas().catch(() => [])
+          ]);
 
-        let list = [];
-        try { const r = await storage.get("agenda-list"); if (r?.value) list = JSON.parse(r.value); } catch {}
-        setSavedAgendas(list);
+          setNameGroups(nameGroupsResult);
+          setCustomHymns(customHymnsResult);
+          setSmartText(smartTextResult);
+          setSavedAgendas(agendasResult);
+        } catch (error) {
+          console.error('Failed to load app data:', error);
+        }
 
         setAgenda({ ...JSON.parse(JSON.stringify(EMPTY_AGENDA)), date: getNextSunday() });
-      } catch {
+      } catch (error) {
+        console.error('App initialization error:', error);
         setAgenda({ ...JSON.parse(JSON.stringify(EMPTY_AGENDA)), date: getNextSunday() });
       }
       setLoading(false);
     }
     init();
   }, []);
+
+  // Set up WebSocket for real-time updates
+  useEffect(() => {
+    if (currentUser) {
+      const ws = connectWebSocket();
+
+      const removeListener = addWebSocketListener((message) => {
+        console.log('WebSocket message received:', message);
+
+        switch (message.type) {
+          case 'NAMES_UPDATED':
+            setNameGroups(message.nameGroups);
+            break;
+          case 'HYMNS_UPDATED':
+            setCustomHymns(message.hymns);
+            break;
+          case 'SMART_TEXT_UPDATED':
+            setSmartText(message.smartText);
+            break;
+          case 'USER_REGISTERED':
+          case 'USER_APPROVED':
+          case 'USER_ROLE_UPDATED':
+          case 'USER_REMOVED':
+            // Reload users if we're an admin
+            if (currentUser.role === 'ADMIN') {
+              loadUsers();
+            }
+            break;
+        }
+      });
+
+      return removeListener;
+    }
+  }, [currentUser]);
+
+  // Load users (admin only)
+  const loadUsers = useCallback(async () => {
+    if (currentUser?.role === 'ADMIN') {
+      try {
+        const userList = await api.getUsers();
+        setUsers(userList);
+      } catch (error) {
+        console.error('Failed to load users:', error);
+      }
+    }
+  }, [currentUser]);
+
+  // Load users when currentUser changes and user is admin
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const updateField = useCallback((path, value) => {
     setAgenda(prev => {
@@ -720,792 +836,648 @@ export default function App() {
 
   const addListItem = useCallback((section, template) => {
     setAgenda(prev => {
-      if (!prev) return prev;
+      const keys = section.split(".");
       const next = { ...prev };
-      if (section.startsWith("wardBusiness.")) {
-        const sub = section.split(".")[1];
-        next.wardBusiness = { ...prev.wardBusiness, [sub]: [...prev.wardBusiness[sub], { ...template }] };
-      } else { next[section] = [...prev[section], { ...template }]; }
+      if (keys.length === 1) {
+        next[keys[0]] = [...prev[keys[0]], template];
+      } else if (keys.length === 2) {
+        next[keys[0]] = { ...prev[keys[0]] };
+        next[keys[0]][keys[1]] = [...prev[keys[0]][keys[1]], template];
+      }
       return next;
     });
   }, []);
 
   const removeListItem = useCallback((section, idx) => {
     setAgenda(prev => {
-      if (!prev) return prev;
+      const keys = section.split(".");
       const next = { ...prev };
-      if (section.startsWith("wardBusiness.")) {
-        const sub = section.split(".")[1];
-        const arr = [...prev.wardBusiness[sub]];
-        if (arr.length > 1) arr.splice(idx, 1);
-        else arr[0] = Object.fromEntries(Object.keys(arr[0]).map(k => [k, ""]));
-        next.wardBusiness = { ...prev.wardBusiness, [sub]: arr };
-      } else {
-        const arr = [...prev[section]];
-        if (arr.length > 1) arr.splice(idx, 1);
-        else arr[0] = Object.fromEntries(Object.keys(arr[0]).map(k => [k, ""]));
-        next[section] = arr;
+      if (keys.length === 1) {
+        next[keys[0]] = prev[keys[0]].filter((_, i) => i !== idx);
+      } else if (keys.length === 2) {
+        next[keys[0]] = { ...prev[keys[0]] };
+        next[keys[0]][keys[1]] = prev[keys[0]][keys[1]].filter((_, i) => i !== idx);
       }
       return next;
     });
   }, []);
 
+  const toggle = useCallback((section) => {
+    setExpanded(prev => ({ ...prev, [section]: !prev[section] }));
+  }, []);
+
   const saveAgenda = useCallback(async () => {
-    const a = agendaRef.current;
-    if (!a) return;
+    if (!agenda?.date) return;
+
+    setSaveStatus("Saving...");
     try {
-      await storage.set(`agenda:${a.date}`, JSON.stringify(a));
-      setSavedAgendas(prev => {
-        const nl = [...new Set([a.date, ...prev])].sort((x, y) => y.localeCompare(x));
-        storage.set("agenda-list", JSON.stringify(nl)).catch(() => {});
-        return nl;
-      });
-      setSaveStatus("Saved!"); setTimeout(() => setSaveStatus(""), 2000);
-    } catch { setSaveStatus("Error"); setTimeout(() => setSaveStatus(""), 3000); }
-  }, []);
+      await api.saveAgenda(agenda.date, agenda);
 
-  const saveNameGroups = useCallback(async (g) => {
-    setNameGroups(g);
-    try { await storage.set("agenda-name-groups", JSON.stringify(g)); } catch {}
-  }, []);
+      // Update saved agendas list
+      const updatedList = await api.getSavedAgendas();
+      setSavedAgendas(updatedList);
 
-  const saveCustomHymns = useCallback(async (h) => {
-    setCustomHymns(h);
-    try { await storage.set("agenda-custom-hymns", JSON.stringify(h)); } catch {}
-  }, []);
+      setSaveStatus("Saved!");
+      setTimeout(() => setSaveStatus(""), 2000);
+    } catch (error) {
+      console.error('Save failed:', error);
+      setSaveStatus("Error");
+      setTimeout(() => setSaveStatus(""), 3000);
+    }
+  }, [agenda]);
 
   const loadAgenda = useCallback(async (date) => {
     try {
-      const r = await storage.get(`agenda:${date}`);
-      if (r?.value) {
-        const loaded = JSON.parse(r.value);
-        const merged = { ...JSON.parse(JSON.stringify(EMPTY_AGENDA)), ...loaded };
-        merged.wardBusiness = { ...JSON.parse(JSON.stringify(EMPTY_AGENDA.wardBusiness)), ...(loaded.wardBusiness || {}) };
-        setAgenda(merged); setView("edit");
-      }
-    } catch {}
+      const agendaData = await api.getAgenda(date);
+      setAgenda(agendaData);
+      setView("edit");
+    } catch (error) {
+      console.error('Load failed:', error);
+      alert('Failed to load agenda: ' + error.message);
+    }
   }, []);
 
-  const deleteAgenda = useCallback(async (date) => {
-    try {
-      await storage.delete(`agenda:${date}`);
-      setSavedAgendas(prev => {
-        const nl = prev.filter(d => d !== date);
-        storage.set("agenda-list", JSON.stringify(nl)).catch(() => {});
-        return nl;
-      });
-    } catch {}
+  const saveNameGroups = useCallback(async (groups) => {
+    setNameGroups(groups);
   }, []);
 
-  const newAgenda = useCallback(() => {
-    setAgenda({ ...JSON.parse(JSON.stringify(EMPTY_AGENDA)), date: getNextSunday() });
-    setView("edit");
-  }, []);
-
-  const duplicateAgenda = useCallback(() => {
-    setAgenda(prev => {
-      if (!prev) return prev;
-      const nd = new Date(prev.date + "T12:00:00");
-      nd.setDate(nd.getDate() + 7);
-      return {
-        ...JSON.parse(JSON.stringify(EMPTY_AGENDA)),
-        date: nd.toISOString().split("T")[0],
-        presiding: prev.presiding, conducting: prev.conducting,
-        chorister: prev.chorister, organist: prev.organist,
-      };
-    });
-    setView("edit");
+  const saveCustomHymns = useCallback(async (hymns) => {
+    setCustomHymns(hymns);
   }, []);
 
   // ── AUTHENTICATION FUNCTIONS ──
-  const loadUsersFromStorage = useCallback(async () => {
-    try {
-      const result = await storage.get("agenda-users");
-      return JSON.parse(result.value);
-    } catch {
-      return [];
-    }
+  const handleLogin = useCallback((user) => {
+    setCurrentUser(user);
   }, []);
 
-  const saveUsers = useCallback(async (userList) => {
-    setUsers(userList);
-    try {
-      await storage.set("agenda-users", JSON.stringify(userList));
-    } catch (e) {
-      console.error("Failed to save users:", e);
-    }
-  }, []);
-
-  const registerUser = useCallback(async (userData) => {
-    const existingUsers = await loadUsersFromStorage();
-    const isFirstUser = existingUsers.length === 0;
-
-    const newUser = {
-      id: Date.now().toString(),
-      username: userData.username,
-      email: userData.email,
-      role: isFirstUser ? USER_ROLES.ADMIN : USER_ROLES.VIEWER,
-      approved: isFirstUser,
-      createdAt: new Date().toISOString()
-    };
-
-    const updatedUsers = [...existingUsers, newUser];
-    await saveUsers(updatedUsers);
-
-    if (isFirstUser) {
-      setCurrentUser(newUser);
-      await storage.set("agenda-current-user", newUser.id);
-      return { success: true, user: newUser };
+  const handleRegister = useCallback((result) => {
+    if (result.requiresApproval) {
+      setAuthView("pending");
     } else {
-      return { success: true, needsApproval: true };
-    }
-  }, [saveUsers, loadUsersFromStorage]);
-
-  const loginUser = useCallback(async (username) => {
-    try {
-      const result = await storage.get("agenda-users");
-      const userList = JSON.parse(result.value);
-      const user = userList.find(u => u.username === username);
-
-      if (!user) {
-        return { success: false, error: "User not found" };
-      }
-
-      if (!user.approved) {
-        return { success: false, error: "Account pending approval" };
-      }
-
-      setCurrentUser(user);
-      await storage.set("agenda-current-user", user.id);
-      return { success: true, user };
-    } catch {
-      return { success: false, error: "Login failed" };
+      setCurrentUser(result);
     }
   }, []);
 
-  const hasPermission = useCallback((action) => {
-    if (!currentUser) return false;
-
-    switch (action) {
-      case 'view':
-        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR, USER_ROLES.VIEWER].includes(currentUser.role);
-      case 'edit':
-        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR].includes(currentUser.role);
-      case 'admin':
-        return currentUser.role === USER_ROLES.ADMIN;
-      case 'wardBusiness':
-        return [USER_ROLES.ADMIN, USER_ROLES.EDITOR].includes(currentUser.role);
-      default:
-        return false;
+  const handleLogout = useCallback(async () => {
+    try {
+      await api.logout();
+      setCurrentUser(null);
+      setUsers([]);
+      setAuthView("login");
+    } catch (error) {
+      console.error('Logout error:', error);
     }
-  }, [currentUser]);
-
-  const logoutUser = useCallback(async () => {
-    setCurrentUser(null);
-    await storage.delete("agenda-current-user");
   }, []);
 
   const approveUser = useCallback(async (userId) => {
-    const userList = [...users];
-    const userIndex = userList.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      userList[userIndex].approved = true;
-      await saveUsers(userList);
+    try {
+      await api.approveUser(userId);
+      await loadUsers();
+    } catch (error) {
+      console.error('Approve user error:', error);
+      alert('Failed to approve user: ' + error.message);
     }
-  }, [users, saveUsers]);
+  }, [loadUsers]);
 
-  const updateUserRole = useCallback(async (userId, newRole) => {
-    const userList = [...users];
-    const userIndex = userList.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      userList[userIndex].role = newRole;
-      await saveUsers(userList);
+  const updateUserRole = useCallback(async (userId, role) => {
+    try {
+      await api.updateUserRole(userId, role);
+      await loadUsers();
+    } catch (error) {
+      console.error('Update user role error:', error);
+      alert('Failed to update user role: ' + error.message);
     }
-  }, [users, saveUsers]);
+  }, [loadUsers]);
 
   const removeUser = useCallback(async (userId) => {
-    const userList = users.filter(u => u.id !== userId);
-    await saveUsers(userList);
-  }, [users, saveUsers]);
+    try {
+      await api.removeUser(userId);
+      await loadUsers();
+    } catch (error) {
+      console.error('Remove user error:', error);
+      alert('Failed to remove user: ' + error.message);
+    }
+  }, [loadUsers]);
 
-  const toggle = useCallback((k) => setExpanded(p => ({ ...p, [k]: !p[k] })), []);
+  const hasPermission = useCallback((permission) => {
+    if (!currentUser) return false;
+    switch (permission) {
+      case 'wardBusiness': return currentUser.role !== 'VIEWER';
+      case 'edit': return currentUser.role !== 'VIEWER';
+      case 'userManagement': return currentUser.role === 'ADMIN';
+      default: return true;
+    }
+  }, [currentUser]);
 
-  if (loading) return <div style={S.loadWrap}><p style={S.loadText}>Loading...</p></div>;
+  // Show loading screen
+  if (loading) {
+    return (
+      <div style={S.loadingContainer}>
+        <div style={S.loading}>Loading...</div>
+      </div>
+    );
+  }
 
-  // ── AUTHENTICATION VIEWS ──
+  // Show authentication if not logged in
   if (!currentUser) {
-    return (
-      <div style={S.authContainer}>
-        {authView === "login" ? (
-          <LoginForm onLogin={loginUser} onSwitchToRegister={() => setAuthView("register")} />
-        ) : authView === "register" ? (
-          <RegisterForm onRegister={registerUser} onSwitchToLogin={() => setAuthView("login")} onPendingApproval={() => setAuthView("pending")} />
-        ) : (
-          <PendingApproval onBackToLogin={() => setAuthView("login")} />
-        )}
-      </div>
-    );
+    if (authView === "pending") {
+      return <PendingApproval />;
+    } else if (authView === "register") {
+      return <RegisterForm onRegister={handleRegister} onSwitchToLogin={() => setAuthView("login")} />;
+    } else {
+      return <LoginForm onLogin={handleLogin} onSwitchToRegister={() => setAuthView("register")} />;
+    }
   }
 
-  if (!agenda) return <div style={S.loadWrap}><p style={S.loadText}>Loading...</p></div>;
-
-  // ── PREVIEW ──
-  if (view === "preview") {
-    const hasBiz = Object.entries(agenda.wardBusiness).some(([k, v]) => {
-      if (k === "other") return v?.trim();
-      return Array.isArray(v) && v.some(it => Object.values(it).some(x => x?.trim()));
-    });
-    const HL = ({ label, h }) => {
-      if (!h?.number && !h?.title) return null;
-      return (<div style={S.pItem}><span style={S.pItemL}>{label}</span>
-        <span style={S.pItemV}>{h.number && `#${h.number}`}{h.number && h.title && " — "}{h.title}</span></div>);
-    };
-    return (
-      <div style={S.prevOuter}>
-        <div style={S.noPrint}>
-          <button style={S.backBtn} type="button" onClick={() => setView("edit")}>← Back to Edit</button>
-          <button style={S.printBtn} type="button" onClick={() => window.print()}>🖨 Print</button>
-        </div>
-        <div style={S.printPage}>
-          <div style={S.printHdr}>
-            <h1 style={S.printT}>Sacrament Meeting</h1>
-            <h2 style={S.printWard}>{agenda.wardName} Ward{agenda.stakeName ? ` — ${agenda.stakeName} Stake` : ""}</h2>
-            <p style={S.printDate}>{formatDate(agenda.date)}</p>
-          </div>
-          <div style={S.printGrid}>
-            {[["Presiding", agenda.presiding], ["Conducting", agenda.conducting], ["Chorister", agenda.chorister], ["Organist", agenda.organist]].map(([l, v]) => (
-              <div key={l} style={S.printRow}><span style={S.printLbl}>{l}</span><span style={S.printVal}>{v || "—"}</span></div>
-            ))}
-          </div>
-          <div style={S.printDiv} />
-          {agenda.announcements?.trim() && (
-            <div style={{ ...S.pItem, flexDirection: "column" }}>
-              <span style={S.pItemL}>Announcements</span>
-              <div style={S.pAnnouncements}>
-                {agenda.announcements.split('\n').filter(line => line.trim()).map((line, i) => (
-                  <div key={i} style={S.pAnnouncementItem}>
-                    <span style={S.pBullet}>•</span>
-                    <span style={S.pAnnouncementText}>{line.trim()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={S.pSection}>
-            <div style={S.pSectionTitle}>Opening</div>
-
-            {/* Dynamic opening text */}
-            {(agenda.openingHymn?.number || agenda.openingHymn?.title || agenda.invocation) && (
-              <div style={S.pOpeningText}>
-                We will open our meeting by singing Hymn{" "}
-                {agenda.openingHymn?.number && `#${agenda.openingHymn.number}`}
-                {agenda.openingHymn?.number && agenda.openingHymn?.title && " "}
-                {agenda.openingHymn?.title && `"${agenda.openingHymn.title}"`}
-                {agenda.invocation && `, after which ${agenda.invocation} will offer the invocation`}.
-              </div>
-            )}
-
-            <HL label="Opening Hymn" h={agenda.openingHymn} />
-            <div style={S.pItem}><span style={S.pItemL}>Invocation</span><span style={S.pItemV}>{agenda.invocation || "—"}</span></div>
-          </div>
-          {hasBiz && (
-            <div style={S.pSection}>
-              <div style={S.pSectionTitle}>Ward Business</div>
-              {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => {
-                const items = agenda.wardBusiness[key]?.filter(it => Object.values(it).some(v => v?.trim()));
-                if (!items?.length) return null;
-
-                if (key === 'releases') {
-                  return (
-                    <div key={key} style={S.pBizSubSection}>
-                      <div style={S.pSubSectionHeader}>Releases</div>
-                      <div style={S.pReadingText}>
-                        A release has been extended to the following individual{items.length > 1 ? 's' : ''}:
-                      </div>
-                      {items.map((it, i) => (
-                        <div key={i} style={S.pNameItemClean}>
-                          <span style={S.pNameTextBold}>{it.name}</span>
-                          {it.calling && <span style={S.pCallingTextClean}> — {it.calling}</span>}
-                        </div>
-                      ))}
-                      <div style={S.pReadingText}>
-                        Those who wish to express thanks for their service may show it by the uplifted hand.
-                      </div>
-                    </div>
-                  );
-                }
-
-                if (key === 'callings') {
-                  return (
-                    <div key={key} style={S.pBizSubSection}>
-                      <div style={S.pSubSectionHeader}>Sustainings</div>
-                      <div style={S.pReadingText}>
-                        We propose that the following individual{items.length > 1 ? 's' : ''} be sustained. As your name is read please stand:
-                      </div>
-                      {items.map((it, i) => (
-                        <div key={i} style={S.pNameItemClean}>
-                          <span style={S.pNameTextBold}>{it.name}</span>
-                          {it.calling && <span style={S.pCallingTextClean}> — {it.calling}</span>}
-                        </div>
-                      ))}
-                      <div style={S.pReadingText}>
-                        Those in favor show it by the uplifted hand.
-                      </div>
-                      <div style={S.pWaitText}>[Wait]</div>
-                      <div style={S.pReadingText}>
-                        Those opposed, if any, may show it.
-                      </div>
-                    </div>
-                  );
-                }
-
-                if (key === 'ordinations') {
-                  // Group ordinations by office
-                  const groupedByOffice = items.reduce((acc, item) => {
-                    const office = item.office || 'Unknown';
-                    if (!acc[office]) acc[office] = [];
-                    acc[office].push(item);
-                    return acc;
-                  }, {});
-
-                  return (
-                    <div key={key} style={S.pBizSubSection}>
-                      <div style={S.pSubSectionHeader}>Ordinations</div>
-                      {Object.entries(groupedByOffice).map(([office, officeItems], groupIndex) => {
-                        const isDeacon = office === 'Deacon';
-                        const names = officeItems.map(item => item.name).filter(Boolean);
-
-                        if (names.length === 0) return null;
-
-                        return (
-                          <div key={office} style={{marginBottom: groupIndex < Object.keys(groupedByOffice).length - 1 ? 16 : 0}}>
-                            <div style={S.pReadingText}>
-                              We propose that {names.join(', ')}{isDeacon ? ' receive the Aaronic Priesthood and' : ''} be ordained to the office of {office} in the Aaronic Priesthood.
-                            </div>
-                            {names.map((name, i) => (
-                              <div key={i} style={S.pNameItemClean}>
-                                <span style={S.pNameTextBold}>{name}</span>
-                              </div>
-                            ))}
-                            <div style={S.pReadingText}>
-                              Those in favor may manifest it.
-                            </div>
-                            <div style={S.pWaitText}>[Wait]</div>
-                            <div style={S.pReadingText}>
-                              Those opposed, if any, may manifest it.
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={key} style={S.pBizSubSection}>
-                    <div style={S.pSubSectionHeader}>{cfg.itemLabel}s</div>
-                    {items.map((it, i) => (
-                      <div key={i} style={S.pNameItemClean}>
-                        <span style={S.pNameTextBold}>{cfg.fields.map(f => it[f]).filter(Boolean).join(" — ")}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-              {agenda.wardBusiness.other?.trim() && (
-                <div style={S.pBizSubSection}>
-                  <div style={S.pSubSectionHeader}>Other</div>
-                  <div style={S.pAnnouncements}>
-                    {agenda.wardBusiness.other.split('\n').filter(line => line.trim()).map((line, i) => (
-                      <div key={i} style={S.pAnnouncementItem}>
-                        <span style={S.pBullet}>•</span>
-                        <span style={S.pAnnouncementText}>{line.trim()}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          <div style={S.pSection}>
-            <div style={S.pSectionTitle}>Sacrament</div>
-
-            {/* Dynamic sacrament preparation text */}
-            {(agenda.sacramentHymn?.number || agenda.sacramentHymn?.title) && (
-              <div style={S.pReadingText}>
-                We will prepare for the sacrament by singing Hymn{" "}
-                {agenda.sacramentHymn?.number && `#${agenda.sacramentHymn.number}`}
-                {agenda.sacramentHymn?.number && agenda.sacramentHymn?.title && " "}
-                {agenda.sacramentHymn?.title && `"${agenda.sacramentHymn.title}"`}
-                {" "}after which the holders of the Aaronic Priesthood will administer and pass the sacrament.
-              </div>
-            )}
-
-            <HL label="Sacrament Hymn" h={agenda.sacramentHymn} />
-            <div style={S.pItem}><span style={S.pItemL}>Administration of the Sacrament</span></div>
-          </div>
-          <div style={S.pReadingText}>
-            Thank you for your reverence during the sacrament ordinance.
-          </div>
-          <div style={S.pSection}>
-            {agenda.isPrimaryProgram ? (
-              <>
-                <div style={S.pSectionTitle}>Primary Program</div>
-                {agenda.primaryProgramNotes && <p style={S.pNote}>{agenda.primaryProgramNotes}</p>}
-              </>
-            ) : agenda.isFastSunday ? (
-              <>
-                <div style={S.pSectionTitle}>Testimony Meeting</div>
-                <div style={S.pNote}>
-                  Note: The conducting counselor will share their testimony, after which the floor will be opened for others to bear their testimonies.
-                </div>
-                <div style={S.pReadingText}>
-                  The remainder of the time is for the bearing of testimonies. We invite you to come forward and share your testimony, or stand and an Aaronic Priesthood holder will bring a microphone to you. We will plan to conclude at 5 minutes before the hour.
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={S.pSectionTitle}>Program</div>
-                {(() => {
-                  const youthSpeakers = agenda.youthSpeakers.filter(s => s.name?.trim());
-                  const speakers = agenda.speakers.filter(s => s.name?.trim());
-                  const musicalNumbers = agenda.musicalNumbers.filter(m => m.performer?.trim() || m.title?.trim());
-                  const intermediateItem = agenda.intermediateItem;
-                  const items = [];
-
-                  const renderIntermediateItem = () => {
-                    if (!intermediateItem || (!intermediateItem.number && !intermediateItem.title && !intermediateItem.performer)) return null;
-
-                    if (intermediateItem.type === "hymn") {
-                      return (
-                        <div key="intermediate-item" style={S.pItem}>
-                          <span style={S.pItemL}>Intermediate Hymn</span>
-                          <span style={S.pItemV}>{intermediateItem.number && `#${intermediateItem.number}`}{intermediateItem.number && intermediateItem.title && " — "}{intermediateItem.title}</span>
-                        </div>
-                      );
-                    } else {
-                      return (
-                        <div key="intermediate-item" style={S.pItem}>
-                          <span style={S.pItemL}>Musical Number</span>
-                          <span style={S.pItemV}>{intermediateItem.title}{intermediateItem.title && intermediateItem.performer ? " — " : ""}{intermediateItem.performer}</span>
-                        </div>
-                      );
-                    }
-                  };
-
-                  // Add youth speakers
-                  youthSpeakers.forEach((s, i) => {
-                    items.push(<div key={`ys${i}`} style={S.pItem}><span style={S.pItemL}>Youth Speaker</span><span style={S.pItemV}>{s.name}</span></div>);
-                  });
-
-                  // Check for intermediate item after youth speakers
-                  if (intermediateItem?.placement === "after-youth") {
-                    const item = renderIntermediateItem();
-                    if (item) items.push(item);
-                  }
-
-                  // Add speakers with potential intermediate item placement
-                  speakers.forEach((s, i) => {
-                    items.push(<div key={`sp${i}`} style={S.pItem}><span style={S.pItemL}>Speaker</span><span style={S.pItemV}>{s.name}</span></div>);
-
-                    // Check for intermediate item after this speaker
-                    if (intermediateItem?.placement === `after-speaker-${i + 1}`) {
-                      const item = renderIntermediateItem();
-                      if (item) items.push(item);
-                    }
-                  });
-
-                  // Add regular musical numbers (not the intermediate one)
-                  musicalNumbers.forEach((m, i) => {
-                    items.push(<div key={`mn${i}`} style={S.pItem}><span style={S.pItemL}>Musical Number</span><span style={S.pItemV}>{m.title}{m.title && m.performer ? " — " : ""}{m.performer}</span></div>);
-                  });
-
-                  return items;
-                })()}
-              </>
-            )}
-          </div>
-          <div style={S.pSection}>
-            <div style={S.pSectionTitle}>Closing</div>
-            {agenda.intermediateItem?.placement === "before-closing" && (agenda.intermediateItem.number || agenda.intermediateItem.title || agenda.intermediateItem.performer) && (
-              agenda.intermediateItem.type === "hymn" ? (
-                <div style={S.pItem}>
-                  <span style={S.pItemL}>Intermediate Hymn</span>
-                  <span style={S.pItemV}>{agenda.intermediateItem.number && `#${agenda.intermediateItem.number}`}{agenda.intermediateItem.number && agenda.intermediateItem.title && " — "}{agenda.intermediateItem.title}</span>
-                </div>
-              ) : (
-                <div style={S.pItem}>
-                  <span style={S.pItemL}>Musical Number</span>
-                  <span style={S.pItemV}>{agenda.intermediateItem.title}{agenda.intermediateItem.title && agenda.intermediateItem.performer ? " — " : ""}{agenda.intermediateItem.performer}</span>
-                </div>
-              )
-            )}
-            <div style={S.pReadingText}>
-              We appreciate those who have participated today. Thanks to our Chorister {agenda.chorister || "[Name]"} and our Organist {agenda.organist || "[Name]"} for the music. We will close by singing Hymn {agenda.closingHymn?.number && `#${agenda.closingHymn.number}`}{agenda.closingHymn?.number && agenda.closingHymn?.title && " "}{agenda.closingHymn?.title || "[Title]"}, after which {agenda.benediction || "[Name]"} will offer the benediction.
-            </div>
-            <HL label="Closing Hymn" h={agenda.closingHymn} />
-            <div style={S.pItem}><span style={S.pItemL}>Benediction</span><span style={S.pItemV}>{agenda.benediction || "—"}</span></div>
-          </div>
-        </div>
-        <style>{`@media print{.no-print{display:none!important}}`}</style>
-      </div>
-    );
-  }
-
-  // ── HISTORY ──
-  if (view === "history") {
-    return (
-      <div style={S.container}>
-        <div style={S.topBar}>
-          <button style={S.backBtnDk} type="button" onClick={() => setView("edit")}>← Back</button>
-          <h2 style={S.histTitle}>Saved Agendas</h2>
-        </div>
-        {savedAgendas.length === 0 ? <p style={S.empty}>No saved agendas yet.</p> : (
-          <div style={S.histList}>
-            {savedAgendas.map(d => (
-              <div key={d} style={S.histItem}>
-                <button style={S.histBtn} type="button" onClick={() => loadAgenda(d)}><span>{formatDate(d)}</span><span style={S.histArr}>→</span></button>
-                <button style={S.histDel} type="button" onClick={() => { if (confirm("Delete this agenda?")) deleteAgenda(d); }}>✕</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ── EDIT ──
+  // Main application render
   return (
-    <div style={S.container}>
+    <div style={S.app}>
       <div style={S.toolbar}>
-        <div style={S.tbLeft}><h1 style={S.appTitle}>Sacrament Meeting</h1></div>
-        <div style={S.tbRight}>
-          <span style={S.userInfo}>
-            {currentUser.username} ({currentUser.role})
-          </span>
-          <button style={S.toolBtn} type="button" onClick={() => setShowSettings(true)}>⚙ Settings</button>
-          {hasPermission('admin') && (
-            <button style={S.toolBtn} type="button" onClick={() => setShowUserManagement(true)}>👥 Users</button>
+        <div style={S.toolLeft}>
+          <div style={S.userInfo}>
+            <span style={S.userName}>{currentUser.full_name}</span>
+            <span style={S.userRole}>({currentUser.role.toLowerCase()})</span>
+          </div>
+          <button style={S.toolBtn} type="button" onClick={() => setView(view === "edit" ? "print" : "edit")}>
+            {view === "edit" ? "📄 Print View" : "✏️ Edit View"}
+          </button>
+          <button style={S.toolBtn} type="button" onClick={() => setShowSettings(true)}>⚙️ Settings</button>
+          {hasPermission('userManagement') && (
+            <button style={S.toolBtn} type="button" onClick={() => setShowUserManagement(true)}>
+              👥 Users ({users.filter(u => u.approved).length})
+            </button>
           )}
-          <button style={S.toolBtn} type="button" onClick={() => setView("history")}>📋 History</button>
-          {hasPermission('edit') && (
-            <>
-              <button style={S.toolBtn} type="button" onClick={newAgenda}>＋ New</button>
-              <button style={S.toolBtn} type="button" onClick={duplicateAgenda}>⧉ Next Week</button>
-            </>
-          )}
-          <button style={S.toolBtn} type="button" onClick={() => setView("preview")}>🖨 Print</button>
+        </div>
+        <div style={S.toolRight}>
           {hasPermission('edit') && (
             <button style={S.saveBtn} type="button" onClick={saveAgenda}>{saveStatus || "💾 Save"}</button>
           )}
-          <button style={S.toolBtn} type="button" onClick={async () => {
-            await logoutUser();
-            window.location.reload();
-          }}>🚪 Logout</button>
+          <button style={S.toolBtn} type="button" onClick={handleLogout}>🚪 Logout</button>
         </div>
       </div>
 
-      <div style={S.formBody}>
-        <div style={S.fieldGroup}>
-          <div style={S.fRow}>
-            <div style={S.fHalf}><label style={S.fieldLabel}>Date</label><input style={S.input} type="date" value={agenda.date} onChange={e => updateField("date", e.target.value)} /></div>
+      {view === "edit" ? (
+        <div style={S.formBody}>
+          <div style={S.fieldGroup}>
+            <div style={S.fRow}>
+              <div style={S.fHalf}><label style={S.fieldLabel}>Date</label><input style={S.input} type="date" value={agenda.date} onChange={e => updateField("date", e.target.value)} /></div>
+            </div>
+            <div style={S.fRow}>
+              <div style={S.fHalf}><label style={S.fieldLabel}>Ward</label><input style={S.input} type="text" value={agenda.wardName} onChange={e => updateField("wardName", e.target.value)} /></div>
+              <div style={S.fHalf}><label style={S.fieldLabel}>Stake</label><input style={S.input} type="text" value={agenda.stakeName} onChange={e => updateField("stakeName", e.target.value)} /></div>
+            </div>
           </div>
-          <div style={S.fRow}>
-            <div style={S.fHalf}><label style={S.fieldLabel}>Ward</label><input style={S.input} type="text" value={agenda.wardName} onChange={e => updateField("wardName", e.target.value)} /></div>
-            <div style={S.fHalf}><label style={S.fieldLabel}>Stake</label><input style={S.input} type="text" value={agenda.stakeName} onChange={e => updateField("stakeName", e.target.value)} /></div>
+
+          <div style={S.fieldGroup}>
+            <div style={S.fRow}>
+              <div style={S.fHalf}><NameDropdown label="Presiding" value={agenda.presiding} options={nameGroups.presiding || []} onChange={v => updateField("presiding", v)} /></div>
+              <div style={S.fHalf}><NameDropdown label="Conducting" value={agenda.conducting} options={nameGroups.conducting || []} onChange={v => updateField("conducting", v)} /></div>
+            </div>
+            <div style={S.fRow}>
+              <div style={S.fHalf}><NameDropdown label="Chorister" value={agenda.chorister} options={nameGroups.chorister || []} onChange={v => updateField("chorister", v)} /></div>
+              <div style={S.fHalf}><NameDropdown label="Organist" value={agenda.organist} options={nameGroups.organist || []} onChange={v => updateField("organist", v)} /></div>
+            </div>
           </div>
-        </div>
 
-        <div style={S.fieldGroup}>
-          <div style={S.fRow}>
-            <div style={S.fHalf}><NameDropdown label="Presiding" value={agenda.presiding} options={nameGroups.presiding || []} onChange={v => updateField("presiding", v)} /></div>
-            <div style={S.fHalf}><NameDropdown label="Conducting" value={agenda.conducting} options={nameGroups.conducting || []} onChange={v => updateField("conducting", v)} /></div>
+          <div style={S.fieldGroup}>
+            <label style={S.fieldLabel}>Announcements</label>
+            <textarea style={S.ta} rows={4}
+              placeholder="Ward announcements (each line becomes a bullet point)&#10;Example:&#10;Relief Society meeting this Thursday&#10;Youth activity Saturday at 10 AM&#10;Fast Sunday next week"
+              value={agenda.announcements}
+              onChange={e => updateField("announcements", e.target.value)} />
           </div>
-          <div style={S.fRow}>
-            <div style={S.fHalf}><NameDropdown label="Chorister" value={agenda.chorister} options={nameGroups.chorister || []} onChange={v => updateField("chorister", v)} /></div>
-            <div style={S.fHalf}><NameDropdown label="Organist" value={agenda.organist} options={nameGroups.organist || []} onChange={v => updateField("organist", v)} /></div>
-          </div>
-        </div>
 
-        <div style={S.fieldGroup}>
-          <label style={S.fieldLabel}>Announcements</label>
-          <textarea style={S.ta} rows={4}
-            placeholder="Ward announcements (each line becomes a bullet point)&#10;Example:&#10;Relief Society meeting this Thursday&#10;Youth activity Saturday at 10 AM&#10;Fast Sunday next week"
-            value={agenda.announcements}
-            onChange={e => updateField("announcements", e.target.value)} />
-        </div>
+          <HymnInput label="Opening Hymn" hymn={agenda.openingHymn} onChange={v => updateField("openingHymn", v)} allHymns={allHymns} />
+          <div style={S.fieldGroup}><label style={S.fieldLabel}>Invocation</label><input style={S.input} type="text" placeholder="Name" value={agenda.invocation} onChange={e => updateField("invocation", e.target.value)} /></div>
 
-        <HymnInput label="Opening Hymn" hymn={agenda.openingHymn} onChange={v => updateField("openingHymn", v)} allHymns={allHymns} />
-        <div style={S.fieldGroup}><label style={S.fieldLabel}>Invocation</label><input style={S.input} type="text" placeholder="Name" value={agenda.invocation} onChange={e => updateField("invocation", e.target.value)} /></div>
-
-        {hasPermission('wardBusiness') && (
-          <Section label="Ward Business" isOpen={expanded.wardBusiness} onToggle={() => toggle("wardBusiness")}>
-            {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => (
-            <div key={key} style={S.bizSub}>
-              <div style={S.subLabel}>{cfg.itemLabel}s</div>
-              {(agenda.wardBusiness[key] || []).map((item, idx) => (
-                <div key={`wb-${key}-${idx}`} style={S.listRow}>
-                  {cfg.fields.map(f => {
-                    // Special handling for ordination office field
-                    if (key === 'ordinations' && f === 'office') {
+          {hasPermission('wardBusiness') && (
+            <Section label="Ward Business" isOpen={expanded.wardBusiness} onToggle={() => toggle("wardBusiness")}>
+              {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => (
+              <div key={key} style={S.bizSub}>
+                <div style={S.subLabel}>{cfg.itemLabel}s</div>
+                {(agenda.wardBusiness[key] || []).map((item, idx) => (
+                  <div key={`wb-${key}-${idx}`} style={S.listRow}>
+                    {cfg.fields.map(f => {
+                      if (key === 'ordinations' && f === 'office') {
+                        return (
+                          <select
+                            key={`wb-${key}-${idx}-${f}`}
+                            style={S.listIn}
+                            value={item[f] || ""}
+                            onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)}
+                          >
+                            <option value="">— Select Office —</option>
+                            <option value="Deacon">Deacon</option>
+                            <option value="Teacher">Teacher</option>
+                            <option value="Priest">Priest</option>
+                          </select>
+                        );
+                      }
+                      if (key === 'baptismsConfirmations' && f === 'type') {
+                        return (
+                          <select
+                            key={`wb-${key}-${idx}-${f}`}
+                            style={S.listIn}
+                            value={item[f] || ""}
+                            onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)}
+                          >
+                            <option value="">— Select Type —</option>
+                            <option value="Baptism">Baptism</option>
+                            <option value="Confirmation">Confirmation</option>
+                          </select>
+                        );
+                      }
                       return (
-                        <select
-                          key={`wb-${key}-${idx}-${f}`}
-                          style={S.listIn}
-                          value={item[f] || ""}
-                          onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)}
-                        >
-                          <option value="">— Select Office —</option>
-                          <option value="Deacon">Deacon</option>
-                          <option value="Teacher">Teacher</option>
-                          <option value="Priest">Priest</option>
-                        </select>
+                        <input key={`wb-${key}-${idx}-${f}`} style={cfg.fields.length === 1 ? S.listFull : S.listIn}
+                          type="text" placeholder={cfg.labels[cfg.fields.indexOf(f)]} value={item[f] || ""}
+                          onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)} />
                       );
-                    }
-                    // Default input for other fields
-                    return (
-                      <input key={`wb-${key}-${idx}-${f}`} style={cfg.fields.length === 1 ? S.listFull : S.listIn}
-                        type="text" placeholder={cfg.labels[cfg.fields.indexOf(f)]} value={item[f] || ""}
-                        onChange={e => updateField(`wardBusiness.${key}.${idx}.${f}`, e.target.value)} />
-                    );
-                  })}
-                  <button style={S.rmBtn} type="button" onClick={() => removeListItem(`wardBusiness.${key}`, idx)}>✕</button>
-                </div>
-              ))}
-              <button style={S.addBtn} type="button" onClick={() => addListItem(`wardBusiness.${key}`, Object.fromEntries(cfg.fields.map(f => [f, ""])))}>+ Add {cfg.itemLabel}</button>
-            </div>
-          ))}
-            <div style={S.bizSub}><div style={S.subLabel}>Other Business</div>
-              <textarea style={S.ta} rows={3} placeholder="Other ward business (each line becomes a bullet point)&#10;Example:&#10;Stake conference next month&#10;Time change announcement" value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
-          </Section>
-        )}
-
-        <HymnInput label="Sacrament Hymn" hymn={agenda.sacramentHymn} onChange={v => updateField("sacramentHymn", v)} allHymns={allHymns} />
-
-        <Section label="Program Options" isOpen={expanded.primary} onToggle={() => toggle("primary")}>
-          <div style={S.chkRow}><input type="checkbox" id="fs" checked={agenda.isFastSunday} onChange={e => {
-            if (e.target.checked) {
-              setAgenda(prev => ({ ...prev, isFastSunday: true, isPrimaryProgram: false, isEaster: false, isChristmas: false }));
-            } else {
-              updateField("isFastSunday", false);
-            }
-          }} style={S.chk} />
-            <label htmlFor="fs" style={S.chkLbl}>This is Fast Sunday (testimony meeting)</label></div>
-
-          <div style={S.chkRow}><input type="checkbox" id="pt" checked={agenda.isPrimaryProgram} onChange={e => {
-            if (e.target.checked) {
-              setAgenda(prev => ({ ...prev, isPrimaryProgram: true, isFastSunday: false, isEaster: false, isChristmas: false }));
-            } else {
-              updateField("isPrimaryProgram", false);
-            }
-          }} style={S.chk} />
-            <label htmlFor="pt" style={S.chkLbl}>This week is the Primary Program</label></div>
-          {agenda.isPrimaryProgram && <textarea style={S.ta} rows={3} placeholder="Program notes..." value={agenda.primaryProgramNotes} onChange={e => updateField("primaryProgramNotes", e.target.value)} />}
-
-          <div style={S.chkRow}><input type="checkbox" id="es" checked={agenda.isEaster} onChange={e => {
-            if (e.target.checked) {
-              setAgenda(prev => ({ ...prev, isEaster: true, isFastSunday: false, isPrimaryProgram: false, isChristmas: false }));
-            } else {
-              updateField("isEaster", false);
-            }
-          }} style={S.chk} />
-            <label htmlFor="es" style={S.chkLbl}>This is Easter Sunday</label></div>
-
-          <div style={S.chkRow}><input type="checkbox" id="ch" checked={agenda.isChristmas} onChange={e => {
-            if (e.target.checked) {
-              setAgenda(prev => ({ ...prev, isChristmas: true, isFastSunday: false, isPrimaryProgram: false, isEaster: false }));
-            } else {
-              updateField("isChristmas", false);
-            }
-          }} style={S.chk} />
-            <label htmlFor="ch" style={S.chkLbl}>This is Christmas Sunday</label></div>
-        </Section>
-
-        <Section label="Youth Speakers" isOpen={expanded.youthSpeakers} onToggle={() => toggle("youthSpeakers")}>
-          {agenda.youthSpeakers.map((s, i) => (
-            <div key={`yspk-${i}`} style={S.listRow}>
-              <input style={S.listFull} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`youthSpeakers.${i}.name`, e.target.value)} />
-              <button style={S.rmBtn} type="button" onClick={() => removeListItem("youthSpeakers", i)}>✕</button>
-            </div>
-          ))}
-          <button style={S.addBtn} type="button" onClick={() => addListItem("youthSpeakers", { name: "" })}>+ Add Youth Speaker</button>
-        </Section>
-
-        <Section label="Speakers" isOpen={expanded.speakers} onToggle={() => toggle("speakers")}>
-          {agenda.speakers.map((s, i) => (
-            <div key={`spk-${i}`} style={S.listRow}>
-              <input style={S.listFull} type="text" placeholder="Name" value={s.name} onChange={e => updateField(`speakers.${i}.name`, e.target.value)} />
-              <button style={S.rmBtn} type="button" onClick={() => removeListItem("speakers", i)}>✕</button>
-            </div>
-          ))}
-          <button style={S.addBtn} type="button" onClick={() => addListItem("speakers", { name: "" })}>+ Add Speaker</button>
-        </Section>
-
-        {(agenda.isEaster || agenda.isChristmas) && (
-          <Section label="Musical Numbers / Special Items" isOpen={expanded.musicalNumbers} onToggle={() => toggle("musicalNumbers")}>
-            {agenda.musicalNumbers.map((m, i) => (
-              <div key={`mus-${i}`} style={S.listRow}>
-                <input style={S.listIn} type="text" placeholder="Title" value={m.title} onChange={e => updateField(`musicalNumbers.${i}.title`, e.target.value)} />
-                <input style={S.listIn} type="text" placeholder="Performer(s)" value={m.performer} onChange={e => updateField(`musicalNumbers.${i}.performer`, e.target.value)} />
-                <button style={S.rmBtn} type="button" onClick={() => removeListItem("musicalNumbers", i)}>✕</button>
+                    })}
+                    <button style={S.rmBtn} type="button" onClick={() => removeListItem(`wardBusiness.${key}`, idx)}>✕</button>
+                  </div>
+                ))}
+                <button style={S.addBtn} type="button" onClick={() => addListItem(`wardBusiness.${key}`, Object.fromEntries(cfg.fields.map(f => [f, ""])))}>+ Add {cfg.itemLabel}</button>
               </div>
             ))}
-            <button style={S.addBtn} type="button" onClick={() => addListItem("musicalNumbers", { performer: "", title: "" })}>+ Add Musical Number</button>
-          </Section>
-        )}
+              <div style={S.bizSub}><div style={S.subLabel}>Other Business</div>
+                <textarea style={S.ta} rows={3} placeholder="Other ward business (each line becomes a bullet point)&#10;Example:&#10;Stake conference next month&#10;Time change announcement" value={agenda.wardBusiness.other || ""} onChange={e => updateField("wardBusiness.other", e.target.value)} /></div>
+            </Section>
+          )}
 
-        <div style={S.fieldGroup}>
-          <label style={S.fieldLabel}>Intermediate Item</label>
-          <div style={S.fRow}>
-            <div style={S.fHalf}>
-              <label style={S.fieldLabel}>Type</label>
-              <select style={S.select} value={agenda.intermediateItem?.type || "hymn"} onChange={e => updateField("intermediateItem.type", e.target.value)}>
-                <option value="hymn">Hymn</option>
-                <option value="musical">Musical Number</option>
-              </select>
-            </div>
-            <div style={S.fHalf}>
-              <label style={S.fieldLabel}>Placement</label>
-              <select style={S.select} value={agenda.intermediateItem?.placement || "after-youth"} onChange={e => updateField("intermediateItem.placement", e.target.value)}>
-                <option value="after-youth">After Youth Speakers</option>
-                {agenda.speakers.map((_, i) => (
-                  <option key={`after-speaker-${i + 1}`} value={`after-speaker-${i + 1}`}>After Speaker {i + 1}</option>
+          <HymnInput label="Sacrament Hymn" hymn={agenda.sacramentHymn} onChange={v => updateField("sacramentHymn", v)} allHymns={allHymns} />
+
+          <Section label="Program Options" isOpen={expanded.primary} onToggle={() => toggle("primary")}>
+            <div style={S.chkRow}><input type="checkbox" id="fs" checked={agenda.isFastSunday} onChange={e => {
+              if (e.target.checked) {
+                setAgenda(prev => ({ ...prev, isFastSunday: true, isPrimaryProgram: false, isEaster: false, isChristmas: false }));
+              } else {
+                updateField("isFastSunday", false);
+              }
+            }} style={S.chk} />
+              <label htmlFor="fs" style={S.chkLbl}>This is Fast Sunday (testimony meeting)</label></div>
+
+            <div style={S.chkRow}><input type="checkbox" id="pt" checked={agenda.isPrimaryProgram} onChange={e => {
+              if (e.target.checked) {
+                setAgenda(prev => ({ ...prev, isPrimaryProgram: true, isFastSunday: false, isEaster: false, isChristmas: false }));
+              } else {
+                updateField("isPrimaryProgram", false);
+              }
+            }} style={S.chk} />
+              <label htmlFor="pt" style={S.chkLbl}>This is Primary Program</label></div>
+
+            {agenda.isPrimaryProgram && (
+              <div style={S.primaryDetails}>
+                <div style={S.fieldGroup}><label style={S.fieldLabel}>Primary Theme</label><input style={S.input} type="text" placeholder="Program theme" value={agenda.primaryTheme} onChange={e => updateField("primaryTheme", e.target.value)} /></div>
+                <div style={S.fRow}>
+                  <div style={S.fHalf}><NameDropdown label="Primary Presiding" value={agenda.primaryPresiding} options={nameGroups.presiding || []} onChange={v => updateField("primaryPresiding", v)} /></div>
+                  <div style={S.fHalf}><NameDropdown label="Primary Conducting" value={agenda.primaryConducting} options={nameGroups.conducting || []} onChange={v => updateField("primaryConducting", v)} /></div>
+                </div>
+                <HymnInput label="Primary Opening Hymn" hymn={agenda.primaryOpeningHymn} onChange={v => updateField("primaryOpeningHymn", v)} allHymns={allHymns} />
+                <HymnInput label="Primary Closing Hymn" hymn={agenda.primaryClosingHymn} onChange={v => updateField("primaryClosingHymn", v)} allHymns={allHymns} />
+              </div>
+            )}
+
+            <div style={S.chkRow}><input type="checkbox" id="es" checked={agenda.isEaster} onChange={e => {
+              if (e.target.checked) {
+                setAgenda(prev => ({ ...prev, isEaster: true, isFastSunday: false, isPrimaryProgram: false, isChristmas: false }));
+              } else {
+                updateField("isEaster", false);
+              }
+            }} style={S.chk} />
+              <label htmlFor="es" style={S.chkLbl}>This is Easter Sunday</label></div>
+
+            <div style={S.chkRow}><input type="checkbox" id="cs" checked={agenda.isChristmas} onChange={e => {
+              if (e.target.checked) {
+                setAgenda(prev => ({ ...prev, isChristmas: true, isFastSunday: false, isPrimaryProgram: false, isEaster: false }));
+              } else {
+                updateField("isChristmas", false);
+              }
+            }} style={S.chk} />
+              <label htmlFor="cs" style={S.chkLbl}>This is Christmas program</label></div>
+
+            {agenda.isChristmas && (
+              <div style={S.fieldGroup}><label style={S.fieldLabel}>Christmas Theme</label><input style={S.input} type="text" value={agenda.christmasTheme} onChange={e => updateField("christmasTheme", e.target.value)} /></div>
+            )}
+          </Section>
+
+          {!agenda.isFastSunday && !agenda.isPrimaryProgram && !agenda.isEaster && !agenda.isChristmas && (
+            <>
+              <Section label="Youth Speakers" isOpen={expanded.youthSpeakers} onToggle={() => toggle("youthSpeakers")}>
+                {agenda.youthSpeakers.map((speaker, idx) => (
+                  <div key={`ys-${idx}`} style={S.speakerBlock}>
+                    <div style={S.listRow}>
+                      <input style={S.listIn} type="text" placeholder="Name" value={speaker.name} onChange={e => updateField(`youthSpeakers.${idx}.name`, e.target.value)} />
+                      <input style={S.listIn} type="text" placeholder="Topic" value={speaker.topic} onChange={e => updateField(`youthSpeakers.${idx}.topic`, e.target.value)} />
+                      <button style={S.rmBtn} type="button" onClick={() => removeListItem("youthSpeakers", idx)}>✕</button>
+                    </div>
+                    <div style={S.intermediateRow}>
+                      <label style={S.intermediateLabel}>Intermediate music after this speaker:</label>
+                      <select style={S.intermediateSelect} value={speaker.intermediateMusic?.type || ""} onChange={e => {
+                        const type = e.target.value;
+                        if (type === "") {
+                          updateField(`youthSpeakers.${idx}.intermediateMusic`, null);
+                        } else {
+                          updateField(`youthSpeakers.${idx}.intermediateMusic`, { type, hymn: { number: "", title: "" }, musical: { performers: "", title: "" } });
+                        }
+                      }}>
+                        <option value="">None</option>
+                        <option value="hymn">Intermediate Hymn</option>
+                        <option value="musical">Musical Number</option>
+                      </select>
+                      {speaker.intermediateMusic?.type === "hymn" && (
+                        <div style={S.hymnRow}>
+                          <input style={S.hymnNum} type="text" placeholder="#" value={speaker.intermediateMusic.hymn.number}
+                            onChange={e => updateField(`youthSpeakers.${idx}.intermediateMusic.hymn`, { ...speaker.intermediateMusic.hymn, number: e.target.value, title: allHymns[e.target.value] || speaker.intermediateMusic.hymn.title })} />
+                          <input style={S.hymnTitle} type="text" placeholder="Hymn title" value={speaker.intermediateMusic.hymn.title}
+                            onChange={e => updateField(`youthSpeakers.${idx}.intermediateMusic.hymn`, { ...speaker.intermediateMusic.hymn, title: e.target.value })} />
+                        </div>
+                      )}
+                      {speaker.intermediateMusic?.type === "musical" && (
+                        <div style={S.hymnRow}>
+                          <input style={S.hymnTitle} type="text" placeholder="Performers" value={speaker.intermediateMusic.musical.performers}
+                            onChange={e => updateField(`youthSpeakers.${idx}.intermediateMusic.musical`, { ...speaker.intermediateMusic.musical, performers: e.target.value })} />
+                          <input style={S.hymnTitle} type="text" placeholder="Title" value={speaker.intermediateMusic.musical.title}
+                            onChange={e => updateField(`youthSpeakers.${idx}.intermediateMusic.musical`, { ...speaker.intermediateMusic.musical, title: e.target.value })} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ))}
-                <option value="before-closing">Before Closing Hymn (traditional)</option>
-              </select>
+                <button style={S.addBtn} type="button" onClick={() => addListItem("youthSpeakers", { name: "", topic: "", intermediateMusic: null })}>+ Add Youth Speaker</button>
+              </Section>
+
+              <Section label="Speakers" isOpen={expanded.speakers} onToggle={() => toggle("speakers")}>
+                {agenda.speakers.map((speaker, idx) => (
+                  <div key={`sp-${idx}`} style={S.speakerBlock}>
+                    <div style={S.listRow}>
+                      <input style={S.listIn} type="text" placeholder="Name" value={speaker.name} onChange={e => updateField(`speakers.${idx}.name`, e.target.value)} />
+                      <input style={S.listIn} type="text" placeholder="Topic" value={speaker.topic} onChange={e => updateField(`speakers.${idx}.topic`, e.target.value)} />
+                      <button style={S.rmBtn} type="button" onClick={() => removeListItem("speakers", idx)}>✕</button>
+                    </div>
+                    <div style={S.intermediateRow}>
+                      <label style={S.intermediateLabel}>Intermediate music after this speaker:</label>
+                      <select style={S.intermediateSelect} value={speaker.intermediateMusic?.type || ""} onChange={e => {
+                        const type = e.target.value;
+                        if (type === "") {
+                          updateField(`speakers.${idx}.intermediateMusic`, null);
+                        } else {
+                          updateField(`speakers.${idx}.intermediateMusic`, { type, hymn: { number: "", title: "" }, musical: { performers: "", title: "" } });
+                        }
+                      }}>
+                        <option value="">None</option>
+                        <option value="hymn">Intermediate Hymn</option>
+                        <option value="musical">Musical Number</option>
+                      </select>
+                      {speaker.intermediateMusic?.type === "hymn" && (
+                        <div style={S.hymnRow}>
+                          <input style={S.hymnNum} type="text" placeholder="#" value={speaker.intermediateMusic.hymn.number}
+                            onChange={e => updateField(`speakers.${idx}.intermediateMusic.hymn`, { ...speaker.intermediateMusic.hymn, number: e.target.value, title: allHymns[e.target.value] || speaker.intermediateMusic.hymn.title })} />
+                          <input style={S.hymnTitle} type="text" placeholder="Hymn title" value={speaker.intermediateMusic.hymn.title}
+                            onChange={e => updateField(`speakers.${idx}.intermediateMusic.hymn`, { ...speaker.intermediateMusic.hymn, title: e.target.value })} />
+                        </div>
+                      )}
+                      {speaker.intermediateMusic?.type === "musical" && (
+                        <div style={S.hymnRow}>
+                          <input style={S.hymnTitle} type="text" placeholder="Performers" value={speaker.intermediateMusic.musical.performers}
+                            onChange={e => updateField(`speakers.${idx}.intermediateMusic.musical`, { ...speaker.intermediateMusic.musical, performers: e.target.value })} />
+                          <input style={S.hymnTitle} type="text" placeholder="Title" value={speaker.intermediateMusic.musical.title}
+                            onChange={e => updateField(`speakers.${idx}.intermediateMusic.musical`, { ...speaker.intermediateMusic.musical, title: e.target.value })} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <button style={S.addBtn} type="button" onClick={() => addListItem("speakers", { name: "", topic: "", intermediateMusic: null })}>+ Add Speaker</button>
+              </Section>
+
+              <Section label="Musical Numbers" isOpen={expanded.musicalNumbers} onToggle={() => toggle("musicalNumbers")}>
+                {agenda.musicalNumbers.map((music, idx) => (
+                  <div key={`mn-${idx}`} style={S.listRow}>
+                    <input style={S.listIn} type="text" placeholder="Performers" value={music.performers} onChange={e => updateField(`musicalNumbers.${idx}.performers`, e.target.value)} />
+                    <input style={S.listIn} type="text" placeholder="Title" value={music.title} onChange={e => updateField(`musicalNumbers.${idx}.title`, e.target.value)} />
+                    <button style={S.rmBtn} type="button" onClick={() => removeListItem("musicalNumbers", idx)}>✕</button>
+                  </div>
+                ))}
+                <button style={S.addBtn} type="button" onClick={() => addListItem("musicalNumbers", { performers: "", title: "" })}>+ Add Musical Number</button>
+              </Section>
+            </>
+          )}
+
+          <HymnInput label="Closing Hymn" hymn={agenda.closingHymn} onChange={v => updateField("closingHymn", v)} allHymns={allHymns} />
+          <div style={S.fieldGroup}><label style={S.fieldLabel}>Benediction</label><input style={S.input} type="text" placeholder="Name" value={agenda.benediction} onChange={e => updateField("benediction", e.target.value)} /></div>
+        </div>
+      ) : (
+        <div style={P.container} ref={printRef}>
+          {/* Print view content would go here - keeping original print logic */}
+          <div style={P.page}>
+            <div style={P.header}>
+              <h1 style={P.title}>SACRAMENT MEETING</h1>
+              <div style={P.ward}>{agenda.wardName} Ward</div>
+              <div style={P.stake}>{agenda.stakeName} Stake</div>
+              <div style={P.date}>{new Date(agenda.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+            </div>
+
+            {/* Opening text */}
+            {smartText.openingText && (
+              <div style={P.readingText}>{smartText.openingText}</div>
+            )}
+
+            <div style={P.section}>
+              <div style={P.sectionTitle}>PRESIDING AND CONDUCTING</div>
+              {agenda.presiding && <div style={P.item}><strong>Presiding:</strong> {agenda.presiding}</div>}
+              {agenda.conducting && <div style={P.item}><strong>Conducting:</strong> {agenda.conducting}</div>}
+              {agenda.chorister && <div style={P.item}><strong>Chorister:</strong> {agenda.chorister}</div>}
+              {agenda.organist && <div style={P.item}><strong>Organist:</strong> {agenda.organist}</div>}
+            </div>
+
+            {agenda.announcements && (
+              <div style={P.section}>
+                <div style={P.sectionTitle}>ANNOUNCEMENTS</div>
+                <div style={P.announcements}>
+                  {agenda.announcements.split('\n').filter(line => line.trim()).map((line, idx) => (
+                    <div key={idx} style={P.announcementItem}>• {line.trim()}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={P.section}>
+              <div style={P.sectionTitle}>ORDER OF SERVICE</div>
+
+              {agenda.openingHymn.number && (
+                <div style={P.item}>
+                  <strong>Opening Hymn:</strong> #{agenda.openingHymn.number} "{agenda.openingHymn.title}"
+                </div>
+              )}
+
+              {agenda.invocation && (
+                <div style={P.item}><strong>Invocation:</strong> {agenda.invocation}</div>
+              )}
+
+              {hasPermission('wardBusiness') && Object.entries(BIZ_SECTIONS).some(([key]) =>
+                (agenda.wardBusiness[key] || []).some(item => Object.values(item).some(val => val.trim()))
+              ) && (
+                <div style={P.section}>
+                  <div style={P.sectionTitle}>WARD BUSINESS</div>
+                  {Object.entries(BIZ_SECTIONS).map(([key, cfg]) => {
+                    const items = (agenda.wardBusiness[key] || []).filter(item =>
+                      Object.values(item).some(val => val && val.trim())
+                    );
+                    if (items.length === 0) return null;
+                    return (
+                      <div key={key}>
+                        <div style={P.bizTitle}>{cfg.itemLabel}s:</div>
+                        {items.map((item, idx) => (
+                          <div key={idx} style={P.bizItem}>
+                            {key === 'ordinations'
+                              ? `${item.name} - ${item.office}`
+                              : key === 'baptismsConfirmations'
+                              ? `${item.name} - ${item.type}`
+                              : key === 'newMembers'
+                              ? `${item.name} - ${item.from}`
+                              : `${item.name} - ${item.calling}`
+                            }
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {agenda.wardBusiness.other && agenda.wardBusiness.other.trim() && (
+                    <div>
+                      <div style={P.bizTitle}>Other Business:</div>
+                      {agenda.wardBusiness.other.split('\n').filter(line => line.trim()).map((line, idx) => (
+                        <div key={idx} style={P.bizItem}>• {line.trim()}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {agenda.sacramentHymn.number && (
+                <div style={P.item}>
+                  <strong>Sacrament Hymn:</strong> #{agenda.sacramentHymn.number} "{agenda.sacramentHymn.title}"
+                </div>
+              )}
+
+              <div style={P.item}><strong>Administration of the Sacrament</strong></div>
+
+              {/* Reverence text */}
+              {smartText.reverenceText && (
+                <div style={P.readingText}>{smartText.reverenceText}</div>
+              )}
+
+              {agenda.isFastSunday && (
+                <div style={P.item}><strong>Fast and Testimony Meeting</strong></div>
+              )}
+
+              {agenda.isPrimaryProgram && (
+                <>
+                  <div style={P.item}><strong>Primary Program: "{agenda.primaryTheme}"</strong></div>
+                  {agenda.primaryPresiding && <div style={P.item}>Primary Presiding: {agenda.primaryPresiding}</div>}
+                  {agenda.primaryConducting && <div style={P.item}>Primary Conducting: {agenda.primaryConducting}</div>}
+                  {agenda.primaryOpeningHymn.number && (
+                    <div style={P.item}>Primary Opening Hymn: #{agenda.primaryOpeningHymn.number} "{agenda.primaryOpeningHymn.title}"</div>
+                  )}
+                  {agenda.primaryClosingHymn.number && (
+                    <div style={P.item}>Primary Closing Hymn: #{agenda.primaryClosingHymn.number} "{agenda.primaryClosingHymn.title}"</div>
+                  )}
+                </>
+              )}
+
+              {agenda.isEaster && (
+                <div style={P.item}><strong>Easter Sunday Program</strong></div>
+              )}
+
+              {agenda.isChristmas && (
+                <div style={P.item}><strong>Christmas Program: "{agenda.christmasTheme}"</strong></div>
+              )}
+
+              {!agenda.isFastSunday && !agenda.isPrimaryProgram && !agenda.isEaster && !agenda.isChristmas && (
+                <>
+                  {agenda.youthSpeakers.filter(s => s.name.trim() || s.topic.trim()).map((speaker, idx) => (
+                    <React.Fragment key={idx}>
+                      <div style={P.item}>
+                        <strong>Youth Speaker:</strong> {speaker.name} {speaker.topic && `- "${speaker.topic}"`}
+                      </div>
+                      {speaker.intermediateMusic && (
+                        <div style={P.item}>
+                          {speaker.intermediateMusic.type === 'hymn' && speaker.intermediateMusic.hymn.number && (
+                            <>
+                              <strong>Intermediate Hymn:</strong> {`#${speaker.intermediateMusic.hymn.number} "${speaker.intermediateMusic.hymn.title}"`}
+                            </>
+                          )}
+                          {speaker.intermediateMusic.type === 'musical' && speaker.intermediateMusic.musical.performers && (
+                            <div>
+                              <strong>Musical Number:</strong> {speaker.intermediateMusic.musical.performers} {speaker.intermediateMusic.musical.title && `- "${speaker.intermediateMusic.musical.title}"`}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  ))}
+
+                  {agenda.speakers.filter(s => s.name.trim() || s.topic.trim()).map((speaker, idx) => (
+                    <React.Fragment key={idx}>
+                      <div style={P.item}>
+                        <strong>Speaker:</strong> {speaker.name} {speaker.topic && `- "${speaker.topic}"`}
+                      </div>
+                      {speaker.intermediateMusic && (
+                        <div style={P.item}>
+                          {speaker.intermediateMusic.type === 'hymn' && speaker.intermediateMusic.hymn.number && (
+                            <>
+                              <strong>Intermediate Hymn:</strong> {`#${speaker.intermediateMusic.hymn.number} "${speaker.intermediateMusic.hymn.title}"`}
+                            </>
+                          )}
+                          {speaker.intermediateMusic.type === 'musical' && speaker.intermediateMusic.musical.performers && (
+                            <div>
+                              <strong>Musical Number:</strong> {speaker.intermediateMusic.musical.performers} {speaker.intermediateMusic.musical.title && `- "${speaker.intermediateMusic.musical.title}"`}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  ))}
+
+                  {agenda.musicalNumbers.filter(m => m.performers.trim() || m.title.trim()).map((music, idx) => (
+                    <div key={idx} style={P.item}>
+                      <strong>Musical Number:</strong> {music.performers} {music.title && `- "${music.title}"`}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {agenda.closingHymn.number && (
+                <div style={P.item}>
+                  <strong>Closing Hymn:</strong> #{agenda.closingHymn.number} "{agenda.closingHymn.title}"
+                </div>
+              )}
+
+              {agenda.benediction && (
+                <div style={P.item}><strong>Benediction:</strong> {agenda.benediction}</div>
+              )}
+
+              {/* Appreciation text with variable substitution */}
+              {smartText.appreciationText && (
+                <div style={P.readingText}>
+                  {smartText.appreciationText
+                    .replace(/\$\{agenda\.chorister\}/g, agenda.chorister || '[Chorister]')
+                    .replace(/\$\{agenda\.organist\}/g, agenda.organist || '[Organist]')
+                    .replace(/\$\{agenda\.closingHymn\.number\}/g, agenda.closingHymn.number || '[#]')
+                    .replace(/\$\{agenda\.closingHymn\.title\}/g, agenda.closingHymn.title || '[Hymn Title]')
+                    .replace(/\$\{agenda\.benediction\}/g, agenda.benediction || '[Benediction]')
+                  }
+                </div>
+              )}
             </div>
           </div>
-
-          {agenda.intermediateItem?.type === "hymn" ? (
-            <HymnInput label="Hymn" hymn={{ number: agenda.intermediateItem?.number || "", title: agenda.intermediateItem?.title || "" }}
-              onChange={v => { updateField("intermediateItem.number", v.number); updateField("intermediateItem.title", v.title); }} allHymns={allHymns} />
-          ) : (
-            <div style={S.fRow}>
-              <div style={S.fHalf}>
-                <label style={S.fieldLabel}>Title</label>
-                <input style={S.input} type="text" placeholder="Musical number title" value={agenda.intermediateItem?.title || ""} onChange={e => updateField("intermediateItem.title", e.target.value)} />
-              </div>
-              <div style={S.fHalf}>
-                <label style={S.fieldLabel}>Performer(s)</label>
-                <input style={S.input} type="text" placeholder="Performer(s)" value={agenda.intermediateItem?.performer || ""} onChange={e => updateField("intermediateItem.performer", e.target.value)} />
-              </div>
-            </div>
-          )}
         </div>
-
-        <HymnInput label="Closing Hymn" hymn={agenda.closingHymn} onChange={v => updateField("closingHymn", v)} allHymns={allHymns} />
-
-        <div style={S.fieldGroup}><label style={S.fieldLabel}>Benediction</label><input style={S.input} type="text" placeholder="Name" value={agenda.benediction} onChange={e => updateField("benediction", e.target.value)} /></div>
-      </div>
+      )}
 
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)}
         nameGroups={nameGroups} onSaveNames={saveNameGroups}
         customHymns={customHymns} onSaveHymns={saveCustomHymns}
-        smartText={smartText} onSaveSmartText={async (text) => {
-          setSmartText(text);
-          await storage.set("agenda-smart-text", JSON.stringify(text));
-        }} />
+        smartText={smartText} onSaveSmartText={setSmartText} />
+
       <UserManagementModal
         isOpen={showUserManagement}
         onClose={() => setShowUserManagement(false)}
@@ -1515,151 +1487,130 @@ export default function App() {
         onUpdateUserRole={updateUserRole}
         onRemoveUser={removeUser}
       />
-      <style>{`@media print{body *{visibility:hidden!important}.no-print{display:none!important}}`}</style>
     </div>
   );
 }
 
 // ── STYLES ──
-const C = { bg:"#FAF9F7", bd:"#E8E4DF", bl:"#F0EDE8", tx:"#2D2A26", mt:"#8A847B", ac:"#3D5A80", al:"#E8EEF4" };
-const ff = "'Georgia','Times New Roman',serif";
-const fs = "'Segoe UI','Helvetica Neue',Arial,sans-serif";
+const C = { bg: "#f8f9fa", fg: "#fff", bd: "#e9ecef", tx: "#212529", mt: "#6c757d", ac: "#4a90e2", bl: "#e3f2fd" };
+const fs = '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif';
 
 const S = {
-  loadWrap:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:fs},
-  loadText:{color:C.mt,fontSize:14},
-  // Authentication styles
-  authContainer:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:fs},
-  authForm:{background:"#fff",padding:"2rem",borderRadius:12,border:`1px solid ${C.bd}`,boxShadow:"0 4px 16px rgba(0,0,0,0.08)",maxWidth:400,width:"100%",margin:"0 20px"},
-  authTitle:{margin:"0 0 0.5rem",fontSize:20,fontFamily:ff,fontWeight:600,color:C.tx,textAlign:"center"},
-  authSubtitle:{margin:"0 0 1.5rem",fontSize:16,fontFamily:fs,fontWeight:400,color:C.mt,textAlign:"center"},
-  authField:{marginBottom:"1rem"},
-  authBtn:{width:"100%",background:C.ac,border:"none",color:"#fff",padding:"10px 16px",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:600,fontFamily:fs,marginTop:"0.5rem"},
-  authError:{color:"#d32f2f",fontSize:13,margin:"0.5rem 0 0",padding:0,textAlign:"center"},
-  authMessage:{color:C.tx,fontSize:14,lineHeight:1.5,textAlign:"center",margin:"1rem 0 1.5rem"},
-  authLink:{textAlign:"center",fontSize:13,color:C.mt,margin:"1rem 0 0"},
-  authLinkBtn:{background:"none",border:"none",color:C.ac,cursor:"pointer",textDecoration:"underline",fontSize:13,fontFamily:fs},
-  // Modal styles
-  modalOverlay:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"20px"},
-  modalContent:{background:"#fff",borderRadius:12,maxWidth:600,width:"100%",maxHeight:"90vh",overflow:"hidden",boxShadow:"0 10px 30px rgba(0,0,0,0.2)"},
-  modalHeader:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 24px",borderBottom:`1px solid ${C.bd}`},
-  modalTitle:{margin:0,fontSize:18,fontWeight:600,color:C.tx},
-  modalCloseBtn:{background:"none",border:"none",fontSize:24,color:C.mt,cursor:"pointer",padding:0,lineHeight:1},
-  modalBody:{padding:"20px 24px",maxHeight:"70vh",overflowY:"auto"},
-  userSection:{marginBottom:"2rem"},
-  sectionTitle:{fontSize:14,fontWeight:600,color:C.ac,marginBottom:"1rem",textTransform:"uppercase",letterSpacing:"0.05em"},
-  userItem:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:C.bl,borderRadius:8,marginBottom:"0.5rem"},
-  userInfo:{display:"flex",flexDirection:"column",gap:"4px"},
-  userEmail:{fontSize:12,color:C.mt},
-  userDate:{fontSize:12,color:C.mt},
-  userRole:{fontSize:12,color:C.ac,fontWeight:500},
-  userActions:{display:"flex",alignItems:"center",gap:"8px"},
-  approveBtn:{background:"#4CAF50",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
-  rejectBtn:{background:"#f44336",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
-  removeBtn:{background:"#ff9800",border:"none",color:"#fff",padding:"6px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
-  roleSelect:{padding:"6px 8px",borderRadius:6,border:`1px solid ${C.bd}`,fontSize:12,fontFamily:fs,marginRight:"8px"},
-  container:{background:C.bg,minHeight:"100vh",fontFamily:fs,color:C.tx},
-  toolbar:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",background:C.ac,color:"#fff",position:"sticky",top:0,zIndex:100,flexWrap:"wrap",gap:6},
-  tbLeft:{display:"flex",alignItems:"center"},tbRight:{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"},
-  appTitle:{margin:0,fontSize:17,fontFamily:ff,fontWeight:600,letterSpacing:"0.02em"},
-  userInfo:{color:"rgba(255,255,255,0.8)",fontSize:12,fontFamily:fs,padding:"0 8px"},
-  toolBtn:{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",color:"#fff",padding:"5px 10px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
-  saveBtn:{background:"#fff",border:"none",color:C.ac,padding:"5px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs,minWidth:72},
-  formBody:{maxWidth:680,margin:"0 auto",padding:"16px 14px 80px"},
-  fieldGroup:{marginBottom:14},fRow:{display:"flex",gap:10},fHalf:{flex:1,marginBottom:10},
-  fieldLabel:{display:"block",fontSize:11,fontWeight:600,color:C.mt,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3},
-  input:{width:"100%",padding:"7px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:14,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box"},
-  select:{width:"100%",padding:"7px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:14,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box",cursor:"pointer"},
-  switchBtn:{background:C.al,border:`1px solid ${C.bd}`,borderRadius:6,padding:"6px 10px",cursor:"pointer",fontSize:12,color:C.ac,fontWeight:600},
-  ta:{width:"100%",padding:"7px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:14,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box",resize:"vertical"},
-  hymnRow:{marginBottom:14},hymnInputs:{display:"flex",gap:8},
-  hymnNum:{width:56,padding:"7px 8px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:14,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",textAlign:"center"},
-  hymnTitle:{width:"100%",padding:"7px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:14,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box"},
-  sugBox:{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:`1px solid ${C.bd}`,borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,0.12)",zIndex:50,maxHeight:220,overflowY:"auto",marginTop:2},
-  sugItem:{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"8px 12px",cursor:"pointer",fontSize:13,fontFamily:fs,color:C.tx,borderBottom:`1px solid ${C.bl}`},
-  sugNum:{color:C.ac,fontWeight:600,marginRight:6},
-  secBlock:{marginBottom:10,border:`1px solid ${C.bd}`,borderRadius:8,background:"#fff",overflow:"hidden"},
-  secToggle:{display:"flex",alignItems:"center",width:"100%",background:"none",border:"none",padding:"10px 14px",cursor:"pointer",textAlign:"left",fontFamily:fs},
-  secArrow:{fontSize:12,color:C.mt,marginRight:8,width:14},secLabel:{fontSize:13,fontWeight:600,color:C.tx},
-  secContent:{padding:"0 14px 14px"},bizSub:{marginBottom:10},subLabel:{fontSize:11,fontWeight:600,color:C.ac,marginBottom:4},
-  listRow:{display:"flex",gap:6,marginBottom:5,alignItems:"center"},
-  listIn:{flex:1,padding:"6px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:13,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box"},
-  listFull:{flex:1,padding:"6px 9px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:13,fontFamily:fs,color:C.tx,background:"#fff",outline:"none",boxSizing:"border-box"},
-  rmBtn:{background:"none",border:"none",color:C.mt,cursor:"pointer",fontSize:14,padding:"2px 5px",borderRadius:4,lineHeight:1},
-  addBtn:{background:"none",border:"none",color:C.ac,cursor:"pointer",fontSize:12,padding:"3px 0",fontFamily:fs,fontWeight:500},
-  chkRow:{display:"flex",alignItems:"center",gap:8,marginBottom:8},chk:{accentColor:C.ac},chkLbl:{fontSize:13,color:C.tx},
-  topBar:{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",borderBottom:`1px solid ${C.bd}`},
-  backBtnDk:{background:"none",border:`1px solid ${C.bd}`,padding:"5px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs,color:C.tx},
-  histTitle:{margin:0,fontSize:17,fontFamily:ff},histList:{maxWidth:580,margin:"16px auto",padding:"0 14px"},
-  histItem:{display:"flex",alignItems:"center",marginBottom:5,background:"#fff",borderRadius:8,border:`1px solid ${C.bd}`,overflow:"hidden"},
-  histBtn:{flex:1,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",background:"none",border:"none",cursor:"pointer",fontFamily:fs,fontSize:13,color:C.tx},
-  histArr:{color:C.mt},histDel:{background:"none",border:"none",color:C.mt,cursor:"pointer",padding:"12px 14px",fontSize:13},
-  empty:{textAlign:"center",color:C.mt,padding:36,fontSize:13},
-  // Preview
-  prevOuter:{background:C.bg,minHeight:"100vh",fontFamily:ff},
-  noPrint:{display:"flex",gap:8,padding:"10px 18px",background:C.ac,className:"no-print"},
-  backBtn:{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.25)",color:"#fff",padding:"5px 12px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs},
-  printBtn:{background:"#fff",border:"none",color:C.ac,padding:"5px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs},
-  printPage:{maxWidth:620,margin:"0 auto",padding:"36px 28px 50px",background:"#fff",minHeight:"80vh"},
-  printHdr:{textAlign:"center",marginBottom:24,borderBottom:`2px solid ${C.ac}`,paddingBottom:16},
-  printT:{margin:0,fontSize:24,fontWeight:400,letterSpacing:"0.04em",color:C.ac},
-  printWard:{margin:"5px 0 0",fontSize:15,fontWeight:400,color:C.tx},
-  printDate:{margin:"5px 0 0",fontSize:13,color:C.mt},
-  printGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 20px",marginBottom:18,padding:"10px 0"},
-  printRow:{display:"flex",gap:6,alignItems:"baseline"},
-  printLbl:{fontSize:10,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",color:C.mt,minWidth:72,fontFamily:fs},
-  printVal:{fontSize:13,color:C.tx},printDiv:{height:1,background:C.bd,margin:"6px 0 16px"},
-  pItem:{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"10px 12px",margin:"2px 0",background:"#fff",borderRadius:6,border:`1px solid ${C.bl}`,flexWrap:"wrap"},
-  pItemL:{fontSize:14,fontWeight:600,color:C.tx,minWidth:"140px"},pItemV:{fontSize:14,color:C.tx,textAlign:"right",fontWeight:500},
-  pNote:{margin:"3px 0 0",fontSize:12,color:C.mt,fontStyle:"italic",width:"100%"},
-  pAnnouncements:{margin:"8px 0 0",width:"100%"},
-  pAnnouncementItem:{display:"flex",alignItems:"flex-start",margin:"4px 0",lineHeight:1.4},
-  pBullet:{color:C.ac,fontWeight:"bold",marginRight:8,fontSize:16,lineHeight:1},
-  pAnnouncementText:{fontSize:13,color:C.tx,flex:1},
-  pOpeningText:{padding:"12px 0",margin:"8px 0 16px",fontSize:14,color:C.tx,lineHeight:1.6,fontStyle:"italic",textAlign:"center",background:C.bl,borderRadius:8},
-  pBizSec:{padding:"10px 0",margin:"6px 0",borderBottom:`1px solid ${C.bl}`},
-  pSecT:{display:"block",fontSize:13,fontWeight:600,color:C.ac,marginBottom:6},
-  pBizGrp:{marginBottom:16,padding:16,background:"#fff",borderRadius:8,border:`2px solid ${C.ac}`,boxShadow:"0 2px 8px rgba(0,0,0,0.1)"},pBizLbl:{display:"block",fontSize:12,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:C.ac,marginBottom:8,fontFamily:fs,textAlign:"center",background:C.bl,padding:"4px 8px",borderRadius:4},
-  pBizItem:{fontSize:14,color:C.tx,padding:"4px 12px",margin:"2px 0",background:C.bl,borderRadius:4,lineHeight:1.5},
-  pNameItem:{fontSize:16,padding:"6px 12px",margin:"2px 0",background:C.bl,borderRadius:4,textAlign:"left"},
-  pNameText:{fontWeight:600,color:C.tx,fontSize:15},
-  pCallingText:{fontWeight:400,color:C.mt,fontSize:14,fontStyle:"italic"},
-  pBizSubSection:{marginBottom:20},
-  pSubSectionHeader:{fontSize:16,fontWeight:700,color:C.ac,marginBottom:8,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.1em"},
-  pNameItemClean:{fontSize:15,padding:"4px 0",margin:"2px 0",textAlign:"left"},
-  pNameTextBold:{fontWeight:700,color:C.tx,fontSize:15},
-  pCallingTextClean:{fontWeight:400,color:C.tx,fontSize:15},
-  pSection:{marginBottom:24,paddingBottom:16,borderBottom:`2px solid ${C.bd}`,pageBreakInside:"avoid"},
-  pSectionTitle:{fontSize:18,fontWeight:600,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.08em",textAlign:"center",background:`linear-gradient(135deg, ${C.ac} 0%, #5a7ba0 100%)`,color:"#fff",padding:"8px 16px",borderRadius:8,fontFamily:fs},
-  pReadingText:{padding:"8px 12px",margin:"4px 0",fontSize:14,color:C.tx,lineHeight:1.6,fontStyle:"italic",background:C.bl,borderRadius:6},
-  pWaitText:{padding:"4px 12px",margin:"2px 0",fontSize:12,color:C.mt,fontWeight:600,fontStyle:"normal",textAlign:"center",background:"#f8f8f8",borderRadius:4},
+  app: { fontFamily: fs, backgroundColor: C.bg, minHeight: "100vh" },
+  loadingContainer: { display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", fontFamily: fs },
+  loading: { fontSize: "18px", color: C.tx },
+  toolbar: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 24px", backgroundColor: C.fg, borderBottom: `1px solid ${C.bd}`, boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
+  toolLeft: { display: "flex", alignItems: "center", gap: "12px" },
+  toolRight: { display: "flex", alignItems: "center", gap: "12px" },
+  userInfo: { display: "flex", alignItems: "center", gap: "4px", marginRight: "8px" },
+  userName: { fontWeight: "600", color: C.tx },
+  userRole: { fontSize: "12px", color: C.mt },
+  toolBtn: { padding: "6px 12px", border: `1px solid ${C.bd}`, borderRadius: "4px", background: C.fg, color: C.tx, cursor: "pointer", fontSize: "14px", fontFamily: fs },
+  saveBtn: { padding: "6px 12px", border: "none", borderRadius: "4px", background: C.ac, color: C.fg, cursor: "pointer", fontSize: "14px", fontWeight: "600", fontFamily: fs },
+  formBody: { padding: "24px", maxWidth: "800px", margin: "0 auto" },
+  fieldGroup: { marginBottom: "20px" },
+  fieldLabel: { display: "block", marginBottom: "6px", fontWeight: "600", color: C.tx, fontSize: "14px" },
+  input: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs },
+  ta: { width: "100%", padding: "10px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", fontFamily: fs, resize: "vertical" },
+  fRow: { display: "flex", gap: "16px", marginBottom: "12px" },
+  fHalf: { flex: 1 },
+  section: { border: `1px solid ${C.bd}`, borderRadius: "8px", marginBottom: "16px", overflow: "hidden" },
+  sectionHeader: { padding: "12px 16px", backgroundColor: C.bl, borderBottom: `1px solid ${C.bd}`, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" },
+  sectionTitle: { fontWeight: "600", color: C.tx },
+  sectionToggle: { color: C.mt, fontSize: "18px" },
+  sectionBody: { padding: "16px" },
+  chkRow: { display: "flex", alignItems: "center", marginBottom: "12px" },
+  chk: { marginRight: "8px" },
+  chkLbl: { fontSize: "14px", color: C.tx },
+  primaryDetails: { marginTop: "12px", padding: "12px", backgroundColor: C.bg, borderRadius: "6px" },
+  hymnRow: { display: "flex", gap: "8px", marginBottom: "8px" },
+  hymnNum: { width: "60px" },
+  hymnTitle: { flex: 1 },
+  bizSub: { marginBottom: "16px" },
+  subLabel: { fontWeight: "600", marginBottom: "8px", color: C.tx },
+  listRow: { display: "flex", gap: "8px", marginBottom: "8px", alignItems: "center" },
+  listIn: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px" },
+  listFull: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px" },
+  addBtn: { padding: "6px 12px", border: `1px solid ${C.ac}`, borderRadius: "4px", background: C.fg, color: C.ac, cursor: "pointer", fontSize: "12px", fontFamily: fs },
+  rmBtn: { padding: "4px 8px", border: `1px solid #dc3545`, borderRadius: "4px", background: "#dc3545", color: C.fg, cursor: "pointer", fontSize: "12px" },
+  speakerBlock: { marginBottom: "12px", padding: "8px", border: `1px solid ${C.bd}`, borderRadius: "4px", backgroundColor: C.bg },
+  intermediateRow: { marginTop: "8px", fontSize: "12px" },
+  intermediateLabel: { display: "block", marginBottom: "4px", color: C.mt, fontSize: "12px" },
+  intermediateSelect: { padding: "4px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px", marginBottom: "4px" }
+};
+
+const A = {
+  container: { display: "flex", justifyContent: "center", alignItems: "center", minHeight: "100vh", backgroundColor: C.bg, fontFamily: fs },
+  form: { backgroundColor: C.fg, padding: "32px", borderRadius: "8px", boxShadow: "0 4px 6px rgba(0,0,0,0.1)", width: "100%", maxWidth: "400px" },
+  title: { textAlign: "center", marginBottom: "24px", color: C.tx, fontSize: "24px", fontWeight: "600" },
+  input: { width: "100%", padding: "12px", border: `1px solid ${C.bd}`, borderRadius: "6px", fontSize: "14px", marginBottom: "16px", fontFamily: fs },
+  button: { width: "100%", padding: "12px", backgroundColor: C.ac, color: C.fg, border: "none", borderRadius: "6px", fontSize: "16px", fontWeight: "600", cursor: "pointer", fontFamily: fs },
+  error: { backgroundColor: "#f8d7da", color: "#721c24", padding: "8px", borderRadius: "4px", marginBottom: "16px", fontSize: "14px" },
+  switchText: { textAlign: "center", marginTop: "16px", color: C.mt, fontSize: "14px" },
+  switchLink: { background: "none", border: "none", color: C.ac, cursor: "pointer", textDecoration: "underline", fontFamily: fs },
+  message: { color: C.tx, lineHeight: 1.5, marginBottom: "12px" }
 };
 
 const M = {
-  overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:16},
-  box:{background:"#fff",borderRadius:12,width:"100%",maxWidth:520,maxHeight:"85vh",overflow:"auto",boxShadow:"0 8px 32px rgba(0,0,0,0.2)"},
-  header:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",borderBottom:`1px solid ${C.bd}`},
-  title:{margin:0,fontSize:16,fontFamily:ff,color:C.tx},
-  closeBtn:{background:"none",border:"none",fontSize:18,cursor:"pointer",color:C.mt,padding:4},
-  tabs:{display:"flex",borderBottom:`1px solid ${C.bd}`},
-  tab:{flex:1,padding:"10px",background:"none",border:"none",cursor:"pointer",fontSize:13,fontFamily:fs,color:C.mt,textAlign:"center"},
-  tabActive:{flex:1,padding:"10px",background:"none",border:"none",borderBottom:`2px solid ${C.ac}`,cursor:"pointer",fontSize:13,fontFamily:fs,color:C.ac,fontWeight:600,textAlign:"center"},
-  body:{padding:"16px 20px"},
-  group:{marginBottom:20},groupLabel:{fontSize:13,fontWeight:600,color:C.tx,marginBottom:2},
-  groupHint:{fontSize:11,color:C.mt,marginBottom:8},
-  nameList:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8,minHeight:28},
-  nameTag:{display:"flex",alignItems:"center",gap:4,background:C.al,padding:"4px 10px",borderRadius:20,fontSize:13,color:C.ac},
-  nameRemove:{background:"none",border:"none",fontSize:12,cursor:"pointer",color:C.ac,padding:0,lineHeight:1},
-  addRow:{display:"flex",gap:6},addInput:{flex:1,padding:"6px 10px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:13,fontFamily:fs,outline:"none"},
-  addBtnS:{background:C.ac,color:"#fff",border:"none",padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs},
-  hymnList:{maxHeight:300,overflowY:"auto"},
-  hymnItem:{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:`1px solid ${C.bl}`},
-  hymnNum:{color:C.ac,fontWeight:600,fontSize:13,minWidth:40},hymnTitle:{flex:1,fontSize:13,color:C.tx},
-  csvSection:{marginBottom:16,padding:12,background:C.bl,borderRadius:8},
-  csvLabel:{fontSize:13,fontWeight:600,color:C.tx,marginBottom:4},
-  csvInput:{width:"100%",padding:"6px 10px",border:`1px solid ${C.bd}`,borderRadius:6,fontSize:13,fontFamily:fs,cursor:"pointer"},
-  divider:{textAlign:"center",margin:"16px 0",position:"relative",color:C.mt,fontSize:12,fontWeight:600},
-  footer:{display:"flex",justifyContent:"flex-end",gap:8,padding:"12px 20px",borderTop:`1px solid ${C.bd}`},
-  cancelBtn:{background:"none",border:`1px solid ${C.bd}`,padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontFamily:fs,color:C.tx},
-  saveBtn:{background:C.ac,color:"#fff",border:"none",padding:"6px 16px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:fs},
+  overlay: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 },
+  box: { backgroundColor: C.fg, borderRadius: "8px", width: "90%", maxWidth: "600px", maxHeight: "80vh", overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 24px", borderBottom: `1px solid ${C.bd}` },
+  title: { margin: 0, fontSize: "18px", fontWeight: "600", color: C.tx },
+  closeBtn: { background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: C.mt, padding: "0", width: "24px", height: "24px" },
+  tabs: { display: "flex", borderBottom: `1px solid ${C.bd}` },
+  tab: { flex: 1, padding: "12px", background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: C.mt, borderBottom: "2px solid transparent", fontFamily: fs },
+  tabActive: { flex: 1, padding: "12px", background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: C.ac, borderBottom: `2px solid ${C.ac}`, fontWeight: "600", fontFamily: fs },
+  body: { padding: "24px", maxHeight: "400px", overflowY: "auto" },
+  footer: { display: "flex", justifyContent: "flex-end", gap: "12px", padding: "16px 24px", borderTop: `1px solid ${C.bd}` },
+  cancelBtn: { padding: "8px 16px", border: `1px solid ${C.bd}`, borderRadius: "4px", background: C.fg, color: C.tx, cursor: "pointer", fontSize: "14px", fontFamily: fs },
+  saveBtn: { padding: "8px 16px", border: "none", borderRadius: "4px", background: C.ac, color: C.fg, cursor: "pointer", fontSize: "14px", fontWeight: "600", fontFamily: fs },
+  group: { marginBottom: "24px" },
+  groupLabel: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", color: C.tx },
+  groupHint: { fontSize: "12px", color: C.mt, marginBottom: "12px" },
+  nameList: { display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px" },
+  nameTag: { display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", backgroundColor: C.bl, borderRadius: "4px", fontSize: "12px" },
+  nameRemove: { background: "none", border: "none", color: "#dc3545", cursor: "pointer", fontSize: "14px", padding: "0", width: "16px", height: "16px" },
+  addRow: { display: "flex", gap: "8px", alignItems: "center" },
+  addInput: { flex: 1, padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs },
+  addBtnS: { padding: "6px 12px", border: `1px solid ${C.ac}`, borderRadius: "4px", background: C.ac, color: C.fg, cursor: "pointer", fontSize: "12px", fontFamily: fs },
+  input: { width: "100%", padding: "8px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "14px", fontFamily: fs },
+  csvSection: { marginBottom: "16px", padding: "12px", backgroundColor: C.bg, borderRadius: "6px" },
+  csvLabel: { fontWeight: "600", marginBottom: "8px", color: C.tx },
+  csvInput: { width: "100%", padding: "6px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px" },
+  divider: { textAlign: "center", margin: "16px 0", color: C.mt, fontSize: "12px", fontWeight: "600" },
+  hymnList: { maxHeight: "200px", overflowY: "auto", border: `1px solid ${C.bd}`, borderRadius: "4px" },
+  hymnItem: { display: "flex", alignItems: "center", gap: "8px", padding: "8px", borderBottom: `1px solid ${C.bd}`, fontSize: "12px" },
+  hymnNum: { fontWeight: "600", color: C.ac, minWidth: "30px" },
+  hymnTitle: { flex: 1 },
+  userSection: { marginBottom: "24px" },
+  userSectionTitle: { fontSize: "16px", fontWeight: "600", marginBottom: "12px", color: C.tx },
+  userList: { display: "flex", flexDirection: "column", gap: "8px" },
+  userItem: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", border: `1px solid ${C.bd}`, borderRadius: "6px" },
+  userInfo: { flex: 1 },
+  userName: { fontWeight: "600", color: C.tx, fontSize: "14px" },
+  userDetails: { fontSize: "12px", color: C.mt, marginTop: "2px" },
+  userActions: { display: "flex", gap: "8px", alignItems: "center" },
+  roleSelect: { padding: "4px 8px", border: `1px solid ${C.bd}`, borderRadius: "4px", fontSize: "12px", fontFamily: fs },
+  approveBtn: { padding: "4px 8px", background: "#28a745", color: C.fg, border: "none", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontFamily: fs },
+  removeBtn: { padding: "4px 8px", background: "#dc3545", color: C.fg, border: "none", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontFamily: fs },
+  emptyState: { textAlign: "center", color: C.mt, fontStyle: "italic", padding: "16px" }
+};
+
+const P = {
+  container: { backgroundColor: C.fg, fontFamily: fs },
+  page: { width: "8.5in", minHeight: "11in", margin: "0 auto", padding: "0.5in", fontSize: "12px", lineHeight: 1.4, color: C.tx },
+  header: { textAlign: "center", marginBottom: "32px", paddingBottom: "16px", borderBottom: `2px solid ${C.ac}` },
+  title: { fontSize: "28px", fontWeight: "700", color: C.ac, margin: "0 0 8px 0", letterSpacing: "1px" },
+  ward: { fontSize: "18px", fontWeight: "600", color: C.tx, margin: "4px 0" },
+  stake: { fontSize: "16px", color: C.mt, margin: "2px 0" },
+  date: { fontSize: "14px", color: C.mt, fontWeight: "500", marginTop: "8px" },
+  section: { marginBottom: "24px", paddingBottom: "16px", borderBottom: `2px solid ${C.bd}`, pageBreakInside: "avoid" },
+  sectionTitle: { fontSize: "18px", fontWeight: 600, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center", background: `linear-gradient(135deg, ${C.ac} 0%, #5a7ba0 100%)`, color: "#fff", padding: "8px 16px", borderRadius: 8, fontFamily: fs },
+  item: { marginBottom: "8px", fontSize: "14px", lineHeight: 1.6 },
+  announcements: { marginLeft: "16px" },
+  announcementItem: { marginBottom: "4px", lineHeight: 1.5 },
+  bizTitle: { fontWeight: "600", color: C.ac, marginBottom: "4px", fontSize: "14px" },
+  bizItem: { fontSize: 14, color: C.tx, padding: "4px 12px", margin: "2px 0", background: C.bl, borderRadius: 4, lineHeight: 1.5 },
+  readingText: { padding: "8px 12px", margin: "4px 0", fontSize: 14, color: C.tx, lineHeight: 1.6, fontStyle: "italic", background: C.bl, borderRadius: 6 },
+  callingText: { fontWeight: 400, color: C.mt, fontSize: 14, fontStyle: "italic" }
 };
