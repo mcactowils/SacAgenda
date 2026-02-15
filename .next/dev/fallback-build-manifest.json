@@ -12,6 +12,19 @@
       "static/chunks/[root-of-the-server]__ba483687._.js",
       "static/chunks/Projects_SacAgenda_pages__app_2da965e7._.js",
       "static/chunks/turbopack-Projects_SacAgenda_pages__app_654a4380._.js"
+    ],
+    "/_error": [
+      "static/chunks/786d3_next_dist_compiled_3d5f6ff7._.js",
+      "static/chunks/786d3_next_dist_shared_lib_7e05cfde._.js",
+      "static/chunks/786d3_next_dist_client_f06fc091._.js",
+      "static/chunks/786d3_next_dist_452d3277._.js",
+      "static/chunks/786d3_next_error_31755fc8.js",
+      "static/chunks/[next]_entry_page-loader_ts_5790f554._.js",
+      "static/chunks/786d3_react-dom_c19bb626._.js",
+      "static/chunks/786d3_d565d057._.js",
+      "static/chunks/[root-of-the-server]__a3d86ad6._.js",
+      "static/chunks/Projects_SacAgenda_pages__error_2da965e7._.js",
+      "static/chunks/turbopack-Projects_SacAgenda_pages__error_e38cca07._.js"
     ]
   },
   "devFiles": [],
