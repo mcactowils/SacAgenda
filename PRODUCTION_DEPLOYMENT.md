@@ -73,31 +73,37 @@ FRONTEND_URL=https://yourdomain.com
 SESSION_EXPIRE_HOURS=24
 ```
 
-## Deployment Steps
+## Deployment Options
 
-1. **Build the Frontend**:
+### Option 1: Separate Frontend/Backend (Recommended)
+
+**Frontend (Vercel/Netlify):**
+1. Deploy `dist/` folder to Vercel/Netlify
+2. Set environment variables in hosting dashboard
+
+**Backend (Railway/Render):**
+1. Deploy `server/` folder to Railway/Render
+2. Set all server environment variables
+3. Update frontend `.env` with backend URL:
    ```bash
-   npm run build
+   VITE_API_URL=https://your-backend.railway.app/api
+   VITE_WS_URL=wss://your-backend.railway.app
    ```
 
-2. **Upload Files**:
-   - Upload the `dist/` folder contents to your static hosting
-   - Upload the `server/` folder to your backend hosting
+### Option 2: Vercel Full-Stack (No WebSockets)
 
-3. **Set Environment Variables**:
-   - Set all the required environment variables on your hosting platform
-   - Make sure `NODE_ENV=production` is set
+⚠️ **Note**: Vercel serverless doesn't support WebSockets. Real-time features won't work.
 
-4. **Install Dependencies**:
-   ```bash
-   cd server
-   npm install --production
-   ```
+1. Use the included `vercel.json` configuration
+2. Deploy entire project to Vercel
+3. Environment variables are auto-detected
 
-5. **Start the Server**:
-   ```bash
-   npm start
-   ```
+### Option 3: Single Server (VPS/Cloud)
+
+Deploy both frontend and backend to same server:
+1. Build frontend: `npm run build`
+2. Serve `dist/` folder with nginx/apache
+3. Run backend on same domain with proxy to `/api/*`
 
 ## Common Hosting Platforms
 

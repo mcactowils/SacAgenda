@@ -1,0 +1,23 @@
+{
+  "devFiles": [],
+  "ampDevFiles": [],
+  "polyfillFiles": [],
+  "lowPriorityFiles": [],
+  "rootMainFiles": [],
+  "pages": {
+    "/_app": [
+      "static/chunks/786d3_next_dist_compiled_3d5f6ff7._.js",
+      "static/chunks/786d3_next_dist_shared_lib_66e3332b._.js",
+      "static/chunks/786d3_next_dist_client_f06fc091._.js",
+      "static/chunks/786d3_next_dist_ebc941d3._.js",
+      "static/chunks/786d3_next_app_2c8067b6.js",
+      "static/chunks/[next]_entry_page-loader_ts_ce17e80f._.js",
+      "static/chunks/786d3_react-dom_c19bb626._.js",
+      "static/chunks/786d3_d565d057._.js",
+      "static/chunks/[root-of-the-server]__ba483687._.js",
+      "static/chunks/Projects_SacAgenda_pages__app_2da965e7._.js",
+      "static/chunks/turbopack-Projects_SacAgenda_pages__app_654a4380._.js"
+    ]
+  },
+  "ampFirstPages": []
+}

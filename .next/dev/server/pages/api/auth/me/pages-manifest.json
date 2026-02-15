@@ -1,0 +1,3 @@
+{
+  "/api/auth/me": "pages/api/auth/me.js"
+}
